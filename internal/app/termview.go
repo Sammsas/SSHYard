@@ -118,6 +118,16 @@ type termView struct {
 	findQuery  string
 	findActive bool
 	findAt     time.Time // when the matches were found
+
+	// autocomplete
+	inputBuf    string
+	acItems     []termSuggestion
+	acIndex     int
+	acScroll    int
+	acTouched   bool
+	acDismissed bool
+	acProvider  func(input string) []termSuggestion
+	acSubmit    func(cmd string)
 }
 
 func newTermView(t ptyTarget, fontSize float32) *termView {
@@ -736,7 +746,33 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 				return true
 			}
 		}
+		if v.acOpen() {
+			switch {
+			case (mods == 0 && ev.Key == ui.KeyDown) || (mods == ui.Ctrl && ev.Key == ui.KeyN):
+				v.acIndex = (v.acIndex + 1) % len(v.acItems)
+				v.acTouched = true
+				v.clampAcScroll()
+				return true
+			case (mods == 0 && ev.Key == ui.KeyUp) || (mods == ui.Ctrl && ev.Key == ui.KeyP):
+				v.acIndex = (v.acIndex - 1 + len(v.acItems)) % len(v.acItems)
+				v.acTouched = true
+				v.clampAcScroll()
+				return true
+			case mods == 0 && ev.Key == ui.KeyTab:
+				v.acceptAutocomplete(v.acIndex)
+				return true
+			case mods == 0 && ev.Key == ui.KeyEnter && v.acTouched:
+				v.acceptAutocomplete(v.acIndex)
+				return true
+			case mods == 0 && ev.Key == ui.KeyEscape:
+				v.acDismissed = true
+				v.acItems = nil
+				v.acTouched = false
+				return true
+			}
+		}
 		if b, ok := EncodeKey(ev.Key, mods, t.Modes()); ok {
+			v.trackKey(ev.Key, mods, t)
 			v.send(b)
 			key := ev.Key
 			v.fan(func(m vt.Modes) []byte {
@@ -765,6 +801,7 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 		b := []byte(strings.ReplaceAll(ev.Text, "\n", "\r"))
 		v.send(b)
 		v.fan(func(vt.Modes) []byte { return b })
+		v.trackText(ev.Text, t)
 		return true
 	case ui.InputCompose:
 		v.blink.at = time.Time{}

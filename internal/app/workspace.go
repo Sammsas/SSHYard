@@ -565,66 +565,71 @@ func dropPreview(p *ui.Painter, r ui.Rect, edge layout.Edge, tok theme.Tokens) {
 
 func (a *App) termElement(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, pal *theme.Terminal, m locales.Messages) {
 	tv := cn.tv
-	term := ui.Box(c.Key("term")).Grow(1).FillWidth().Focusable().FocusRing(false).Clip().
-		Cursor(ui.CursorText).Label(m.Terminal() + " " + cn.host.Label())
-	if a.focusReq == cn.id && a.page == pageWorkspace {
-		tv.blink.at = time.Time{}
-		term.Focus()
-		a.focusReq = 0
-	}
-	has := term.Focused()
-	tv.focusChanged(has)
-	if cn.s.Term.Modes().MouseTracking {
-		term.Cursor(ui.CursorDefault) // the program's, not a text's
-	}
-	if tv.link.on {
-		term.Cursor(ui.CursorPointer)
-	}
-	if !term.Hovered() && !tv.barDrag {
-		tv.barHover = false
-	}
-	if tv.barHover || tv.barDrag {
-		term.Cursor(ui.CursorDefault) // the scrollbar's, not a text's
-	}
-	if has && t.Focus != n.ID {
-		t.Focus = n.ID
-	}
-	svc := c.Services()
-	tb := term.Bounds()
-	entries := func() []menuEntry { return a.termEntries(t, n, cn, tv, svc, m) }
-	term.HandleInput(func(ev ui.InputEvent) bool {
-		// A left click gives the terminal the keyboard back. A right click
-		// must not: focusing here inserts the find bar and the tab dot
-		// before the next frame, which would move the menu's place.
-		if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
-			t.Focus = n.ID
-			if !has {
-				a.focusReq = cn.id
-			}
+	tv.acProvider = func(input string) []termSuggestion { return a.termSuggestions(cn, tv, input) }
+	tv.acSubmit = func(cmd string) { a.recordHostHistory(cn, cmd) }
+	ui.Box(c.Key("termwrap")).Grow(1).FillWidth().Children(func() {
+		term := ui.Box(c.Key("term")).Fill().Focusable().FocusRing(false).Clip().
+			Cursor(ui.CursorText).Label(m.Terminal() + " " + cn.host.Label())
+		if a.focusReq == cn.id && a.page == pageWorkspace {
+			tv.blink.at = time.Time{}
+			term.Focus()
+			a.focusReq = 0
 		}
-		tv.shortcuts = a.settings.Shortcuts
-		tv.fanout = a.fanoutFrom(cn)
-		tv.holdPaste = func(text string) bool { return a.holdPaste(cn, text) }
-		tv.rightClick, tv.copyOnSelect = a.settings.TerminalRightClick, a.settings.CopyOnSelect
-		tv.openLink = svc.OpenURL
-		// A program reading the mouse takes the right click too.
-		return tv.input(ev, svc) || a.contextPress(tb, ev, entries)
+		has := term.Focused()
+		tv.focusChanged(has)
+		if cn.s.Term.Modes().MouseTracking {
+			term.Cursor(ui.CursorDefault) // the program's, not a text's
+		}
+		if tv.link.on {
+			term.Cursor(ui.CursorPointer)
+		}
+		if !term.Hovered() && !tv.barDrag {
+			tv.barHover = false
+		}
+		if tv.barHover || tv.barDrag {
+			term.Cursor(ui.CursorDefault) // the scrollbar's, not a text's
+		}
+		if has && t.Focus != n.ID {
+			t.Focus = n.ID
+		}
+		svc := c.Services()
+		tb := term.Bounds()
+		entries := func() []menuEntry { return a.termEntries(t, n, cn, tv, svc, m) }
+		term.HandleInput(func(ev ui.InputEvent) bool {
+			// A left click gives the terminal the keyboard back. A right click
+			// must not: focusing here inserts the find bar and the tab dot
+			// before the next frame, which would move the menu's place.
+			if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
+				t.Focus = n.ID
+				if !has {
+					a.focusReq = cn.id
+				}
+			}
+			tv.shortcuts = a.settings.Shortcuts
+			tv.fanout = a.fanoutFrom(cn)
+			tv.holdPaste = func(text string) bool { return a.holdPaste(cn, text) }
+			tv.rightClick, tv.copyOnSelect = a.settings.TerminalRightClick, a.settings.CopyOnSelect
+			tv.openLink = svc.OpenURL
+			// A program reading the mouse takes the right click too.
+			return tv.input(ev, svc) || a.contextPress(tb, ev, entries)
+		})
+		if term.Shortcut(ui.Shift, ui.KeyF10) {
+			a.openContext(tb.X, tb.Y, entries)
+		}
+		term.TextCaret(tv.caret())
+		tv.cursorBlink = a.settings.TerminalCursorBlink
+		tv.cursorStyle = vt.CursorBlock
+		switch a.settings.TerminalCursorStyle {
+		case settings.CursorBar:
+			tv.cursorStyle = vt.CursorBar
+		case settings.CursorUnderline:
+			tv.cursorStyle = vt.CursorUnderline
+		}
+		tv.clear = a.clearContent
+		tv.hl, tv.hlOverride, tv.hlFullScreen = a.highlighter(), a.settings.Highlight.Override, a.settings.Highlight.FullScreen
+		term.Draw(func(p *ui.Painter, r ui.Rect) { tv.paint(p, r, pal, has) })
+		a.termAutocompleteView(c, cn, tv, tb, has, currentTokens(c))
 	})
-	if term.Shortcut(ui.Shift, ui.KeyF10) {
-		a.openContext(tb.X, tb.Y, entries)
-	}
-	term.TextCaret(tv.caret())
-	tv.cursorBlink = a.settings.TerminalCursorBlink
-	tv.cursorStyle = vt.CursorBlock
-	switch a.settings.TerminalCursorStyle {
-	case settings.CursorBar:
-		tv.cursorStyle = vt.CursorBar
-	case settings.CursorUnderline:
-		tv.cursorStyle = vt.CursorUnderline
-	}
-	tv.clear = a.clearContent
-	tv.hl, tv.hlOverride, tv.hlFullScreen = a.highlighter(), a.settings.Highlight.Override, a.settings.Highlight.FullScreen
-	term.Draw(func(p *ui.Painter, r ui.Rect) { tv.paint(p, r, pal, has) })
 }
 
 // termEntries are the context menu of a terminal pane n of tab t.
