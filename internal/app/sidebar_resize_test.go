@@ -70,8 +70,14 @@ func TestSidebarResizeAndHide(t *testing.T) {
 		t.Fatal("outside workspace click did not hide floating sidebar")
 	}
 
+	// Clicking the top-left SSHYard logo shows the floating sidebar.
+	mustClick(t, tt, m.AppName())
+	tt.Frame()
+	if a.settings.SidebarHidden {
+		t.Fatal("clicking SSHYard logo did not show floating sidebar")
+	}
+
 	// Single-clicking a host selects it; double-clicking connects and hides the floating sidebar.
-	mustClick(t, tt, m.ShowSidebar())
 	h, err := a.store.Add(assets.Host{Name: "srv-float", Address: "127.0.0.1", Port: 1, User: "root"})
 	if err != nil {
 		t.Fatal(err)

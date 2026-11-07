@@ -50,15 +50,23 @@ func (a *App) titleBar(c *ui.Context, m locales.Messages, tok theme.Tokens, clea
 			if a.page == pageSettings {
 				a.settingsBack(c, m, tok)
 			} else {
-				ui.Row(c.Key("titlebrand")).Shrink(0).Gap(theme.Space(1)).AlignItems(ui.Center).Children(func() {
+				tip := m.HideSidebar()
+				if a.sidebarHidden() {
+					tip = m.ShowSidebar()
+				}
+				b := ui.ButtonBase(c.Key("titlebrand")).Tooltip(tip).Shrink(0).
+					Height(theme.Space(6)).Padding(0, theme.Space(1.5)).Gap(theme.Space(1)).Radius(theme.RadiusControl).
+					AlignItems(ui.Center).Cursor(ui.CursorPointer)
+				if b.Pressed() {
+					b.Background(tok.Press)
+				} else if b.Hovered() {
+					b.Background(tok.Hover)
+				}
+				b.Children(func() {
 					ui.Image(c, a.logo).Size(16, 16).Shrink(0).Radius(theme.RadiusSmall)
 					ui.Text(c, m.AppName()).FontSize(theme.Footnote).TextColor(tok.TextMuted).SingleLine()
 				})
-				ic, label := icons.HideSidebar, m.HideSidebar()
-				if a.sidebarHidden() {
-					ic, label = icons.ShowSidebar, m.ShowSidebar()
-				}
-				if (IconButton{Icon: ic, Label: label, Size: Small, Active: !a.sidebarHidden(), Toggle: true}).Clicked(c, "tbsb") {
+				if b.Clicked() {
 					a.setSidebarHidden(!a.sidebarHidden())
 				}
 			}
