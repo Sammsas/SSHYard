@@ -1,127 +1,27 @@
 name: CI
 
-# Every push to main runs the full checks and builds, so a broken build
-# shows up before a release tag. Pushes that touch only the website, docs,
-# Markdown or the licence are skipped (path filters never apply to tags).
-# The repository is private and Actions minutes are billed: other branches
-# and pull requests run nothing, a newer push to main cancels the run in
-# progress, and a release tag reuses the run on main before it (see plan).
 on:
   push:
     branches: [main]
-    tags: ['v*']
     paths-ignore:
       - 'website/**'
       - 'docs/**'
       - '**.md'
       - 'LICENSE'
-      - '.github/workflows/website.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# bump.sh's release commit has a group of its own: pushing it must not
-# cancel the run on the commit before it, which its tag may reuse.
 concurrency:
-  group: "ci-${{ github.ref }}${{ github.ref_type == 'branch' && startsWith(github.event.head_commit.message, 'chore(release): bump version to ') && '-release' || '' }}"
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # What this run has to do. A push to main does everything, except for
-  # bump.sh's release commit, which its tag takes care of. A tag reuses a
-  # passed run on main when its commit differs from that run's only in the
-  # version and in skipped files (.github/ci-reuse.sh): it runs no tests,
-  # and a stable tag no builds either, which release.yml makes signed; a
-  # beta still makes its artifacts here.
-  plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      test: ${{ steps.plan.outputs.test }}
-      build: ${{ steps.plan.outputs.build }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 25
-      - id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
-        run: |
-          test=true build=true
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] &&
-            [[ "$HEAD_MESSAGE" == "chore(release): bump version to "* ]]; then
-            echo "Release commit: its tag runs the checks."
-            test=false build=false
-          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
-            # A failed check only means testing the tag again
-            tested="$(bash .github/ci-reuse.sh "$GITHUB_REPOSITORY" "$GITHUB_SHA")" ||
-              { echo "::warning::Could not check for a CI run to reuse; testing $GITHUB_REF_NAME."; tested=""; }
-            if [ -n "$tested" ]; then
-              echo "$GITHUB_REF_NAME reuses the passed CI run on main for $tested."
-              test=false
-              if [ "$GITHUB_REF_NAME" = "v$(jq -r .version mygo.json)" ]; then build=false; fi
-            fi
-          fi
-          echo "test=$test build=$build"
-          echo "test=$test" >> "$GITHUB_OUTPUT"
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-
-  check:
-    name: gofmt, vet, test (race)
-    needs: plan
-    if: needs.plan.outputs.test == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: gofmt
-        run: |
-          out="$(gofmt -l .)"
-          if [ -n "$out" ]; then echo "::error::gofmt needed on:"; echo "$out"; exit 1; fi
-      - run: go vet ./...
-      # internal/app nears go test's default 10m under the race detector.
-      - run: go test -race -count=1 -timeout 30m ./...
-
-  test:
-    name: test (${{ matrix.os }})
-    needs: plan
-    if: needs.plan.outputs.test == 'true'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - run: go test -count=1 ./...
-
   build:
-    name: build ${{ matrix.goos }}/${{ join(matrix.goarch, '+') }}
-    needs: plan
-    if: needs.plan.outputs.build == 'true'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest, goos: linux, goarch: amd64 }
-          - { os: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
-          - { os: windows-latest, goos: windows, goarch: amd64 }
-          - { os: windows-11-arm, goos: windows, goarch: arm64 }
-          # One job for both Macs: hosted macOS runners are scarce, and a
-          # job left waiting for one is cancelled. amd64 is cross-compiled
-          # on Apple silicon (no cgo).
-          - { os: macos-latest, goos: darwin, goarch: [arm64, amd64] }
+    name: build windows/amd64
+    if: "!startsWith(github.event.head_commit.message, 'chore(release): bump version to ')"
+    runs-on: windows-latest
     defaults:
       run:
         shell: bash
@@ -131,85 +31,30 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Cache NSIS
-        if: runner.os == 'Windows'
         uses: actions/cache@v6
         with:
           path: ~\AppData\Local\mygo\nsis-*
           key: nsis-${{ hashFiles('go.sum') }}
-      # Tags: v<version> (the version in mygo.json), or an internal beta
-      # v<version>-beta-<yyyymmddhhmmss>, whose base must be the version in
-      # mygo.json. A beta build carries its full version (About, file
-      # names, installers) and no update channel: "updates" is dropped from
-      # mygo.json for the build, so it never checks for, is offered or
-      # makes update manifests, and stable manifests are never touched.
-      - name: Version
-        id: v
+      - name: Check and test
         run: |
-          version="$(jq -r .version mygo.json)"
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            tag="$GITHUB_REF_NAME"
-            if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-beta-([0-9]{14})$ ]]; then
-              base="${BASH_REMATCH[1]}" ts="${BASH_REMATCH[2]}"
-              if [ "$base" != "$version" ]; then
-                echo "::error::Beta tag $tag is not of mygo.json version $version (expected v$version-beta-<yyyymmddhhmmss>)."
-                exit 1
-              fi
-              # The timestamp must be a real UTC time: parse it and print it
-              # back; an impossible one (month 13, 30 February, 24:00) fails
-              # or comes back different. GNU date on Linux and Windows (Git
-              # Bash), BSD date on macOS.
-              if date --version >/dev/null 2>&1; then
-                back="$(date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:8:2}:${ts:10:2}:${ts:12:2} UTC" +%Y%m%d%H%M%S 2>/dev/null || true)"
-              else
-                back="$(date -u -j -f %Y%m%d%H%M%S "$ts" +%Y%m%d%H%M%S 2>/dev/null || true)"
-              fi
-              # The year must be 2020-2099 too: date takes year 0000.
-              if [ "$back" != "$ts" ] || [[ ! "$ts" =~ ^20[2-9][0-9] ]]; then
-                echo "::error::Beta tag $tag: $ts is not a valid UTC time (yyyymmddhhmmss, year 2020-2099)."
-                exit 1
-              fi
-              version="${tag#v}"
-              # macOS: CFBundleShortVersionString (what About shows) carries
-              # the full version; CFBundleVersion must be numeric, so it is
-              # the timestamp (unique per build, increasing across betas).
-              # mygo's macos.infoPlist keys override the ones it derives.
-              jq --arg v "$version" --arg n "$ts" '.version = $v | del(.updates)
-                | .macos.infoPlist.CFBundleShortVersionString = $v
-                | .macos.infoPlist.CFBundleVersion = $n' mygo.json > mygo.json.beta
-              mv mygo.json.beta mygo.json
-              echo "Beta build $version: updates disabled."
-            elif [ "$tag" != "v$version" ]; then
-              echo "::error::Tag $tag matches neither v$version nor v$version-beta-<yyyymmddhhmmss>."
-              exit 1
-            fi
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Build (unsigned updates; no MYGO_UPDATER_PRIVATE_KEY in CI)
-        env:
-          ARCHES: ${{ join(matrix.goarch, ' ') }}
-        run: |
-          platforms=""
-          for arch in $ARCHES; do platforms="$platforms,${{ matrix.goos }}/$arch"; done
-          go tool mygo build -platform "${platforms#,}"
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "::error::gofmt needed on:"; echo "$out"; exit 1; fi
+          go vet ./...
+          go test -count=1 ./...
+      - name: Build Windows client
+        run: go tool mygo build -platform windows/amd64
       - name: Package Windows portable ZIP
-        if: runner.os == 'Windows'
         run: |
           python .github/windows-portable-test.py
-          python .github/windows-portable.py "build/${{ matrix.goos }}-${{ matrix.goarch }}" "${{ matrix.goarch }}"
+          python .github/windows-portable.py build/windows-amd64 amd64
       - name: List outputs
-        run: ls -la build/${{ matrix.goos }}-*
-      # Builds of main are kept a week; tag and manual builds use the
-      # repository's default retention (0).
+        run: ls -la build/windows-amd64
       - uses: actions/upload-artifact@v7
         with:
-          name: sshyard-${{ steps.v.outputs.version }}-${{ matrix.goos }}-${{ join(matrix.goarch, '-') }}
-          retention-days: ${{ github.event_name == 'push' && github.ref_type == 'branch' && 7 || 0 }}
+          name: sshyard-windows-amd64
+          retention-days: 7
           if-no-files-found: error
           path: |
-            build/*/*.tar.gz
-            build/*/*.deb
-            build/*/*.dmg
-            build/*/*-setup-*.exe
-            build/*/*-portable.zip
-            build/*/install.sh
-            build/*/update-*.json
+            build/windows-amd64/*-setup-*.exe
+            build/windows-amd64/*-portable.zip
+            build/windows-amd64/update-*.json

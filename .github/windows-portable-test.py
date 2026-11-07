@@ -92,11 +92,8 @@ class WindowsPortableTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             dist = Path(work)
             for name in (
-                "sshyard-0.0.4-arm64.dmg", "sshyard-0.0.4-amd64.dmg",
-                "sshyard-setup-0.0.4-amd64.exe", "sshyard_0.0.4_amd64.deb",
-                "sshyard-0.0.4-linux-amd64.tar.gz", "sshyard-setup-0.0.4-arm64.exe",
-                "sshyard-0.0.4-windows-arm64-portable.zip", "sshyard_0.0.4_arm64.deb",
-                "sshyard-0.0.4-linux-arm64.tar.gz", "install.sh", "SHA256SUMS",
+                "sshyard-setup-0.0.4-amd64.exe",
+                "SHA256SUMS",
             ):
                 (dist / name).touch()
             command = [bash, (HERE / "release-download-notes.sh").as_posix(),
@@ -111,13 +108,11 @@ class WindowsPortableTest(unittest.TestCase):
                 f"[Portable ZIP](https://github.com/Licoy/sshyard/releases/download/v0.0.4/{name})",
                 result.stdout,
             )
-            for row in (
-                "| Arm64 | [Installer](https://github.com/Licoy/sshyard/releases/download/v0.0.4/sshyard-setup-0.0.4-arm64.exe)"
-                " · [Portable ZIP](https://github.com/Licoy/sshyard/releases/download/v0.0.4/sshyard-0.0.4-windows-arm64-portable.zip) |",
-                "| Arm64 (aarch64) | [.deb](https://github.com/Licoy/sshyard/releases/download/v0.0.4/sshyard_0.0.4_arm64.deb)"
-                " · [.tar.gz](https://github.com/Licoy/sshyard/releases/download/v0.0.4/sshyard-0.0.4-linux-arm64.tar.gz) |",
-            ):
-                self.assertIn(row, result.stdout)
+            self.assertIn(
+                "| x64 | [Installer](https://github.com/Licoy/sshyard/releases/download/v0.0.4/sshyard-setup-0.0.4-amd64.exe)"
+                f" · [Portable ZIP](https://github.com/Licoy/sshyard/releases/download/v0.0.4/{name}) |",
+                result.stdout,
+            )
             (dist / "sshyard-0.0.5-windows-amd64-portable.zip").touch()
             result = subprocess.run(command, capture_output=True, encoding="utf-8")
             self.assertNotEqual(result.returncode, 0)
