@@ -2,7 +2,9 @@ package app
 
 import (
 	"testing"
+	"time"
 
+	"github.com/Licoy/sshyard/internal/assets"
 	"github.com/Licoy/sshyard/locales"
 )
 
@@ -59,5 +61,32 @@ func TestSidebarResizeAndHide(t *testing.T) {
 	}
 	if a.sbWidth != sidebarMax {
 		t.Fatalf("width after showing = %v, want %v", a.sbWidth, sidebarMax)
+	}
+
+	// Pressing in the workspace outside the floating sidebar hides it.
+	tt.ClickAt(sidebarMax+100, y)
+	tt.Frame()
+	if !a.settings.SidebarHidden {
+		t.Fatal("outside workspace click did not hide floating sidebar")
+	}
+
+	// Single-clicking a host selects it; double-clicking connects and hides the floating sidebar.
+	mustClick(t, tt, m.ShowSidebar())
+	h, err := a.store.Add(assets.Host{Name: "srv-float", Address: "127.0.0.1", Port: 1, User: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	mustClick(t, tt, "srv-float")
+	tt.Frame()
+	if a.selected != h.ID || a.settings.SidebarHidden {
+		t.Fatalf("single click: selected=%q hidden=%v", a.selected, a.settings.SidebarHidden)
+	}
+	tt.Advance(time.Second)
+	mustClick(t, tt, "srv-float")
+	mustClick(t, tt, "srv-float")
+	tt.Frame()
+	if !a.settings.SidebarHidden || len(a.ws.Tabs) != 1 {
+		t.Fatalf("double click: hidden=%v tabs=%d", a.settings.SidebarHidden, len(a.ws.Tabs))
 	}
 }

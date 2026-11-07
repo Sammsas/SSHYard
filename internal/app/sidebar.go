@@ -271,6 +271,7 @@ func (a *App) hostItem(c *ui.Context, m locales.Messages, h assets.Host, prefix 
 	a.hostCardOn(c, m, tok, it, prefix+h.ID, h)
 	if it.DoubleClicked() {
 		a.Connect(h.ID, openAt{})
+		a.setSidebarHidden(true)
 	}
 	a.contextMenu(it, func() []menuEntry { return a.hostEntries(m, h) })
 }
@@ -307,10 +308,16 @@ func (a *App) hostEntries(m locales.Messages, h assets.Host) []menuEntry {
 		}})
 	}
 	groups = append(groups, menuSep, menuEntry{Icon: icons.NewFolder, Label: m.NewGroupEllipsis(), Do: func() { a.openGroupForm("", h.ID) }})
-	connect := []menuEntry{{Icon: icons.Run, Label: m.Connect(), Do: func() { a.Connect(h.ID, openAt{}) }}}
+	connect := []menuEntry{{Icon: icons.Run, Label: m.Connect(), Do: func() {
+		a.Connect(h.ID, openAt{})
+		a.setSidebarHidden(true)
+	}}}
 	if h.SSH() && h.Tmux != "" {
 		// A way in should the host's tmux session not start.
-		connect = append(connect, menuEntry{Icon: icons.Terminal, Label: m.ConnectWithoutTmux(), Do: func() { a.ConnectWithoutTmux(h.ID) }})
+		connect = append(connect, menuEntry{Icon: icons.Terminal, Label: m.ConnectWithoutTmux(), Do: func() {
+			a.ConnectWithoutTmux(h.ID)
+			a.setSidebarHidden(true)
+		}})
 	}
 	return append(connect, []menuEntry{
 		{Icon: icons.SplitRight, Label: m.SplitRight(), Disabled: noTab, Do: beside(func(at openAt) { a.Connect(h.ID, at) })},

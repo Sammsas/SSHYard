@@ -81,11 +81,11 @@ func (a *App) View(c *ui.Context) {
 		// size the sidebar; hidden, the content takes the whole width.
 		sidebar := func() {
 			sb := ui.Box(c.Key("sidebar")).Fill()
-			if imageBackground || !clear {
+			if a.page != pageSettings || imageBackground || !clear {
 				sb.Background(a.chromeFill(tok.Sidebar))
 			}
 			sb.Children(func() {
-				c.SetTheme(tok.SidebarTheme(base, clear))
+				c.SetTheme(tok.SidebarTheme(base, clear && a.page == pageSettings))
 				if a.page == pageSettings {
 					a.settingsNav(c, m, tok)
 				} else {
@@ -98,10 +98,12 @@ func (a *App) View(c *ui.Context) {
 				}
 			})
 		}
+		var contentEl ui.Element
 		content := func() {
 			ui.Column(c.Key("main")).Fill().MinWidth(0).Background(a.contentFill(tok.Canvas, canvasAlpha)).Children(func() {
 				ui.Row(c.Key("body")).Grow(1).Shrink(1).MinWidth(0).FillWidth().MinHeight(0).Children(func() {
-					ui.Column(c.Key("content")).Grow(1).Shrink(1).MinWidth(0).FillHeight().Background(a.contentRegionFill(tok.Canvas)).Children(func() {
+					contentEl = ui.Column(c.Key("content")).Grow(1).Shrink(1).MinWidth(0).FillHeight().Background(a.contentRegionFill(tok.Canvas))
+					contentEl.Children(func() {
 						switch a.page {
 						case pageSettings:
 							a.settingsPage(c, m, tok)
@@ -124,13 +126,58 @@ func (a *App) View(c *ui.Context) {
 				}
 			})
 		}
-		if a.sidebarHidden() {
-			ui.Row(c.Key("frame")).Grow(1).Shrink(1).MinHeight(0).FillWidth().Children(content)
+		if a.page == pageSettings {
+			a.sbWidth = min(max(a.sbWidth, sidebarMin), sidebarMax)
+			ui.Split(c.Key("frame"), &a.sbWidth, sidebar, content).Grow(1).Shrink(1).MinHeight(0).FillWidth()
+			a.saveSidebarWidth(c)
 			return
 		}
-		a.sbWidth = min(max(a.sbWidth, sidebarMin), sidebarMax)
-		ui.Split(c.Key("frame"), &a.sbWidth, sidebar, content).Grow(1).Shrink(1).MinHeight(0).FillWidth()
-		a.saveSidebarWidth(c)
+		ui.Row(c.Key("frame")).Grow(1).Shrink(1).MinHeight(0).FillWidth().Children(func() {
+			content()
+			if a.sidebarHidden() {
+				return
+			}
+			a.sbWidth = min(max(a.sbWidth, sidebarMin), sidebarMax)
+			grip := theme.Space(1.5)
+			sbfloat := ui.Row(c.Key("sbfloat")).Absolute().Left(0).Top(0).Bottom(0)
+			tok.Lift.On(sbfloat)
+			sbfloat.Children(func() {
+				sbwrap := ui.Box(c.Key("sbwrap")).Width(a.sbWidth).FillHeight().Clip()
+				div := ui.Box(c.Key("sbdiv")).Width(1).FillHeight().Shrink(0).Focusable().Role(ui.RoleSplitter)
+				handle := ui.Box(c.Key("sbhandle")).Absolute().Top(0).Bottom(0).Left(a.sbWidth - (grip-1)/2).Width(grip).Cursor(ui.CursorResizeEW)
+				dx, _, held := handle.Dragged()
+				if held {
+					div.Focus()
+					if dx != 0 {
+						a.sbWidth = min(max(a.sbWidth+dx, sidebarMin), sidebarMax)
+						sbwrap.Width(a.sbWidth)
+						handle.Left(a.sbWidth - (grip-1)/2)
+					}
+				}
+				if div.Shortcut(0, ui.KeyLeft) {
+					a.sbWidth = min(max(a.sbWidth-theme.Space(2.5), sidebarMin), sidebarMax)
+					sbwrap.Width(a.sbWidth)
+					handle.Left(a.sbWidth - (grip-1)/2)
+				}
+				if div.Shortcut(0, ui.KeyRight) {
+					a.sbWidth = min(max(a.sbWidth+theme.Space(2.5), sidebarMin), sidebarMax)
+					sbwrap.Width(a.sbWidth)
+					handle.Left(a.sbWidth - (grip-1)/2)
+				}
+				sbwrap.Children(sidebar)
+				div.Draw(func(p *ui.Painter, r ui.Rect) {
+					line := tok.Line
+					if held || handle.Hovered() {
+						line = tok.Accent
+					}
+					p.Fill(r, line, 0)
+				})
+			})
+			if a.menu.key == "" && !a.tabsOpen && contentEl.Bounds().W > 0 && sbfloat.PressedOutside() && !contentEl.PressedOutside() {
+				a.setSidebarHidden(true)
+			}
+			a.saveSidebarWidth(c)
+		})
 	})
 	a.editorView(c, m)
 	a.groupView(c, m)

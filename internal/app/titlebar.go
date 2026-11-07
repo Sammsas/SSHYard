@@ -42,11 +42,11 @@ func (a *App) titleBar(c *ui.Context, m locales.Messages, tok theme.Tokens, clea
 		// Level with the sidebar, and its separator, below, so that the
 		// tabs start where the content does.
 		lead := ui.Row(c.Key("tblead"))
-		if !a.sidebarHidden() {
+		if a.page == pageSettings {
 			lead.Width(max(a.sbWidth+1, bar.Left))
 		}
 		lead.Shrink(0).FillHeight().
-			Padding(0, theme.Space(2), 0, bar.Left+theme.Space(2)).AlignItems(ui.Center).Children(func() {
+			Padding(0, theme.Space(2), 0, bar.Left+theme.Space(2)).Gap(theme.Space(1.5)).AlignItems(ui.Center).Children(func() {
 			if a.page == pageSettings {
 				a.settingsBack(c, m, tok)
 			} else {
@@ -54,6 +54,13 @@ func (a *App) titleBar(c *ui.Context, m locales.Messages, tok theme.Tokens, clea
 					ui.Image(c, a.logo).Size(16, 16).Shrink(0).Radius(theme.RadiusSmall)
 					ui.Text(c, m.AppName()).FontSize(theme.Footnote).TextColor(tok.TextMuted).SingleLine()
 				})
+				ic, label := icons.HideSidebar, m.HideSidebar()
+				if a.sidebarHidden() {
+					ic, label = icons.ShowSidebar, m.ShowSidebar()
+				}
+				if (IconButton{Icon: ic, Label: label, Size: Small, Active: !a.sidebarHidden(), Toggle: true}).Clicked(c, "tbsb") {
+					a.setSidebarHidden(!a.sidebarHidden())
+				}
 			}
 		})
 		a.tabStrip(c, m, tok)
