@@ -114,10 +114,6 @@ func (a *App) View(c *ui.Context) {
 					if a.page != pageWorkspace {
 						return
 					}
-					if len(a.panels) > 0 {
-						a.backgroundSeparator(c, tok.Line, a.backgroundInspectorFill(tok.Canvas)).Width(1).FillHeight().Shrink(0)
-						a.inspectorView(c, m, tok)
-					}
 					a.backgroundSeparator(c, tok.GlassEdge, a.chromeFill(tok.Glass)).Width(1).FillHeight().Shrink(0)
 					a.railView(c, m, tok)
 				})
@@ -181,6 +177,7 @@ func (a *App) View(c *ui.Context) {
 	})
 	a.editorView(c, m)
 	a.groupView(c, m)
+	a.multiSelectView(c, m)
 	a.tabRenameView(c, m)
 	a.snippetSheets(c, m)
 	a.credView(c, m)

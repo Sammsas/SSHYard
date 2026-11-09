@@ -3,7 +3,6 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -45,9 +44,9 @@ func TestLayoutWorkspaceRoundTrip(t *testing.T) {
 	}
 	a.ws.Open(other.item()).Title = "Workspace Beta"
 	a.ws.Active = 0
-	closed, pct := false, float32(37)
-	a.sections["none"], a.stackPct["host/snippets/"] = &closed, &pct
-	a.panels = []inspectorKind{inspectHost, inspectSnippets}
+	closed := false
+	a.sections["none"] = &closed
+	a.ToggleTool(layout.HostInfo)
 	term.cwd = "PRIVATE_CWD"
 	setStartOnce(term, "PRIVATE_START_COMMAND")
 	files.fs.remote.dir = "PRIVATE_REMOTE_DIRECTORY"
@@ -84,8 +83,11 @@ func TestLayoutWorkspaceRoundTrip(t *testing.T) {
 	if assistant.ai.mode != "review" || assistant.ai.provider != "provider" || assistant.ai.model != "model" || assistant.ai.effort != "high" {
 		t.Fatal("AI choices changed")
 	}
-	if again.sections["none"] == nil || *again.sections["none"] || !reflect.DeepEqual(again.panels, []inspectorKind{inspectHost, inspectSnippets}) || again.stackPct["host/snippets/"] == nil || *again.stackPct["host/snippets/"] != 37 {
-		t.Fatal("sidebar or inspector layout changed")
+	if again.sections["none"] == nil || *again.sections["none"] {
+		t.Fatal("sidebar layout changed")
+	}
+	if again.toolPane(layout.HostInfo) != nil {
+		t.Fatal("restored a tool pane")
 	}
 	if again.prompting {
 		t.Fatalf("restoration asked for a password; texts %q", tt.Texts())
@@ -170,5 +172,25 @@ func TestLayoutSilentUnlockStartsSavedConnection(t *testing.T) {
 	})
 	if b.calls.Load() != 0 || srv.Logins() != 2 || again.prompting || again.unlock.modal {
 		t.Fatalf("silent startup interacted or duplicated login: keychain=%d logins=%d", b.calls.Load(), srv.Logins())
+	}
+}
+
+// A layout saved while the rail opened panels beside the panes still
+// restores, without them: they are tool panes now, not saved.
+func TestLayoutDropsPanelsNowPanes(t *testing.T) {
+	dir := t.TempDir()
+	rememberLayoutIn(t, dir)
+	raw := []byte(`{"version":1,"active":0,"tabs":[],"sections":{"none":false},"panels":["host","snippets","history","tmux","bogus","host"],"stackPct":{"host/tmux/":250}}`)
+	if err := os.WriteFile(filepath.Join(dir, "layout.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := appIn(t, dir, nil)
+	if a.layoutBlocked || a.sections["none"] == nil || *a.sections["none"] {
+		t.Fatalf("blocked=%v sections=%v", a.layoutBlocked, a.sections)
+	}
+	for _, k := range []layout.Kind{layout.HostInfo, layout.Tmux, layout.Snippets, layout.History} {
+		if a.toolPane(k) != nil {
+			t.Fatalf("restored the %v pane", k)
+		}
 	}
 }

@@ -136,6 +136,16 @@ func (a *App) aiSettings(c *ui.Context, m locales.Messages, tok theme.Tokens, s 
 				*changed = true
 			}
 		})
+		g.row(m.AiMaxToolCalls(), m.AiMaxToolCallsNote(), func() {
+			in := formTextInput(c.Key("aicalls"), &a.aiCalls).Label(m.AiMaxToolCalls()).
+				Placeholder(strconv.Itoa(settings.DefaultMaxToolCalls)).Width(88)
+			if in.Changed() {
+				if v, ok := maxToolCallsValue(a.aiCalls); ok {
+					s.AIMaxToolCalls = v
+					*changed = true
+				}
+			}
+		})
 		g.row(m.AiAuditDays(), "", func() {
 			if ui.NumberInput(c.Key("aidays"), &a.aiDays, 1, 3650, 1).Changed() {
 				s.AIAuditRetentionDays = int(a.aiDays)
@@ -739,8 +749,9 @@ func hostModeIndex(mode string) int {
 	}
 }
 
-// aiHostFields is the host editor's AI section.
-func (a *App) aiHostFields(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hostForm) {
+// aiHostFields is the host editor's AI section. A Telnet or serial
+// host, whose assistant has no files, has the mode only.
+func (a *App) aiHostFields(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hostForm, files bool) {
 	ui.Collapsible(c.Key("f:ai"), m.AiSettings(), &f.aiOpen, func() {
 		ui.Column(c).Gap(8).FillWidth().Margin(8, 0, 0, 0).Children(func() {
 			ui.Text(c, m.AiHostMode()).FontSize(theme.Footnote).TextColor(tok.TextMuted)
@@ -752,6 +763,9 @@ func (a *App) aiHostFields(c *ui.Context, m locales.Messages, tok theme.Tokens, 
 					f.aiPrev = f.aiIdx
 				}
 			}
+			if !files {
+				return
+			}
 			ui.Text(c, m.AiWritableRoots()).FontSize(theme.Footnote).TextColor(tok.TextMuted)
 			ui.Text(c, m.AiWritableRootsNote()).FontSize(theme.Caption).TextColor(tok.TextMuted)
 			formTextArea(c.Key("f:roots"), &f.roots).FillWidth().Height(64)
@@ -760,4 +774,29 @@ func (a *App) aiHostFields(c *ui.Context, m locales.Messages, tok theme.Tokens, 
 			formTextArea(c.Key("f:sens"), &f.sens).FillWidth().Height(64)
 		})
 	})
+}
+
+// maxToolCallsValue reads the tool-call limit field: empty is the default
+// (nil), 0 is no limit, and any other value must be a whole number the
+// setting accepts. A text that is none of these leaves the setting as it was.
+// No limit takes the explicit 0 so that clearing the field never lifts it.
+func maxToolCallsValue(text string) (*int, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, true
+	}
+	n, err := strconv.Atoi(text)
+	if err != nil || n < 0 || n > settings.AIMaxToolCallsMax {
+		return nil, false
+	}
+	return &n, true
+}
+
+// maxToolCallsText is the setting as the field shows it, empty when unset
+// so that the placeholder shows the default.
+func maxToolCallsText(n *int) string {
+	if n == nil {
+		return ""
+	}
+	return strconv.Itoa(*n)
 }

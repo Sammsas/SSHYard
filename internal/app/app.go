@@ -304,12 +304,8 @@ type App struct {
 
 	// interface state
 	page page
-	// pref is the settings page showing; panels those open beside the
-	// panes, in panelOrder, and stackPct the share of each divider between
-	// them, by the panels from it down
+	// pref is the settings page showing
 	pref     prefPage
-	panels   []inspectorKind
-	stackPct map[string]*float32
 	snippets snippetState
 	// bc is the broadcast panel's state.
 	bc broadcastState
@@ -331,15 +327,21 @@ type App struct {
 	// tmuxWarned are the hosts whose terminals were told that their
 	// server has no tmux, by ID
 	tmuxWarned map[string]bool
-	// usage, docker and tmux are what the usage, Docker and tmux panels
-	// read
+	// usage, docker, tmux and hist are what the usage, Docker, tmux and
+	// command history panels read
 	usage       *usageState
 	docker      *dockerState
 	tmux        *tmuxState
+	hist        *historyState
 	hostHistory map[string][]string
 	selected    string // host chosen in the sidebar
 	search      string
-	searchFocus bool // the search field takes the focus next frame
+	searchFocus bool // the search, its field or button, takes the focus next frame
+	searchOpen  bool // the search shows its field across the toolbar
+	// ping is the hosts' latency the sidebar shows
+	ping pingState
+	// multi is the sidebar choosing several hosts and groups
+	multi       multiSelect
 	sections    map[string]*bool
 	form        *hostForm
 	editing     bool
@@ -486,9 +488,11 @@ type App struct {
 	// audit is one log for every pane, so concurrent writes share its lock.
 	audit *audit.Log
 	// aiRecent is the AI pane last used on a host, by host ID.
-	aiRecent  map[string]int
-	aiLines   float64
-	aiDays    float64
+	aiRecent map[string]int
+	aiLines  float64
+	aiDays   float64
+	// aiCalls is the tool-call limit field, empty for the default.
+	aiCalls   string
 	aiModeIdx int
 	// review is the review model's settings controls.
 	review   reviewControls
@@ -576,7 +580,7 @@ type App struct {
 
 // New opens the app's data.
 func New(p Platform) (*App, error) {
-	a := &App{p: p, ws: layout.New(), conns: map[int]*conn{}, pool: session.NewPool(), typed: map[string]string{}, typedGen: map[string]int{}, skipKeys: map[string]bool{}, rememberKeys: map[string]localkeys.Remembered{}, lk: localkeys.Open(""), sections: map[string]*bool{}, temps: map[string]assets.Host{}, pct: map[int]*float32{}, fwds: map[string]*fwdRun{}, fwdOpen: map[string]bool{}, paneBounds: map[int]ui.Rect{}, metrics: map[string]*session.Collector{}, aiRecent: map[string]int{}, stackPct: map[string]*float32{}}
+	a := &App{p: p, ws: layout.New(), conns: map[int]*conn{}, pool: session.NewPool(), typed: map[string]string{}, typedGen: map[string]int{}, skipKeys: map[string]bool{}, rememberKeys: map[string]localkeys.Remembered{}, lk: localkeys.Open(""), sections: map[string]*bool{}, temps: map[string]assets.Host{}, pct: map[int]*float32{}, fwds: map[string]*fwdRun{}, fwdOpen: map[string]bool{}, paneBounds: map[int]ui.Rect{}, metrics: map[string]*session.Collector{}, aiRecent: map[string]int{}}
 	a.logo = appicon.Bitmap()
 	a.settings = settings.Default()
 	a.shells = detectShells()
@@ -659,6 +663,7 @@ func (a *App) syncChoices() {
 	a.metMount = a.settings.MetricsMount
 	a.aiLines = float64(a.settings.AIContextLines)
 	a.aiDays = float64(a.settings.AIAuditRetentionDays)
+	a.aiCalls = maxToolCallsText(a.settings.AIMaxToolCalls)
 	a.mcpPort = float64(a.settings.MCPPort)
 }
 
@@ -709,6 +714,11 @@ func (a *App) ApplySettings(s settings.Settings) error {
 			old.AIRedact != s.AIRedact || old.AIDefaultMode != s.AIDefaultMode
 		if all || c.ai.agent == "builtin" && !reflect.DeepEqual(providerIn(old, c.ai.provider), providerIn(s, c.ai.provider)) || !reflect.DeepEqual(providerIn(old, old.AIReviewProvider), providerIn(s, s.AIReviewProvider)) {
 			a.invalidateAI(c)
+		} else if c.ai.agent == "builtin" && old.MaxToolCalls() != s.MaxToolCalls() {
+			// The built-in agent reads the limit as a turn starts or
+			// continues, so the turn running is left to finish; an
+			// external agent counts its own calls.
+			c.ai.dirty = true
 		}
 	}
 	if s.Theme != old.Theme && a.p.SetTheme != nil {
@@ -946,14 +956,17 @@ func (a *App) makeConn(hostID string, kind layout.Kind, link int) (*conn, error)
 	if !ok {
 		return nil, assets.ErrNotFound
 	}
-	if isLocal(h.ID) && kind != layout.Terminal {
+	// An assistant opens on any host: on these it types into the terminal.
+	if isLocal(h.ID) && kind != layout.Terminal && kind != layout.AI {
 		return nil, errLocalTerminalOnly
 	}
-	if isStream(h) && kind != layout.Terminal {
+	if isStream(h) && kind != layout.Terminal && kind != layout.AI {
 		return nil, errTerminalOnly
 	}
-	if ex := a.serialPane(h); ex != nil {
-		return nil, &serialInUseError{ex}
+	if kind == layout.Terminal {
+		if ex := a.serialPane(h); ex != nil {
+			return nil, &serialInUseError{ex}
+		}
 	}
 	a.nextConn++
 	c := &conn{id: a.nextConn, kind: kind, host: h}
@@ -962,7 +975,7 @@ func (a *App) makeConn(hostID string, kind layout.Kind, link int) (*conn, error)
 	}
 	if kind == layout.AI {
 		agentName := a.settings.AIDefaultAgent
-		if agentName == "" {
+		if agentName == "" || !hasSSH(h) {
 			agentName = "builtin"
 		}
 		c.ai = &aiState{agent: agentName, link: link, provider: a.defaultProvider()}
@@ -1423,9 +1436,16 @@ func hostsBy(st *assets.Store, query string) (favorites []assets.Host, groups []
 		}
 		byGroup[h.Group] = append(byGroup[h.Group], h)
 	}
-	// Groups made on their own show while empty, but not in a search.
+	// Groups made on their own show while empty, but not in a search,
+	// where a group shows for the hosts of its subgroups too.
+	found := map[string]bool{}
+	for g := range byGroup {
+		for ; g != "" && !found[g]; g = assets.GroupParent(g) {
+			found[g] = true
+		}
+	}
 	for _, g := range st.Groups() {
-		if _, ok := byGroup[g]; ok || query == "" {
+		if found[g] || query == "" {
 			groups = append(groups, g)
 		}
 	}

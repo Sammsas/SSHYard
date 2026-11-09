@@ -75,11 +75,6 @@ func (a *App) loadLayout() {
 		value := v
 		a.sections[k] = &value
 	}
-	a.panels = append([]inspectorKind(nil), snap.Panels...)
-	for k, v := range snap.StackPct {
-		value := v
-		a.stackPct[k] = &value
-	}
 	if skipped {
 		a.toasts = append(a.toasts, func(m locales.Messages) ui.Toast { return ui.Toast{Title: m.LayoutRestoreSkipped(), Type: "warning"} })
 	}
@@ -155,22 +150,6 @@ func validLayout(s layoutSnap) bool {
 	}
 	for _, t := range s.Tabs {
 		if !valid(t.Root, 0) {
-			return false
-		}
-	}
-	panelSeen := map[inspectorKind]bool{}
-	for _, p := range s.Panels {
-		known := false
-		for _, k := range panelOrder {
-			known = known || k == p
-		}
-		if !known || panelSeen[p] {
-			return false
-		}
-		panelSeen[p] = true
-	}
-	for _, v := range s.StackPct {
-		if v <= 0 || v >= 100 {
 			return false
 		}
 	}

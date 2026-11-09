@@ -87,6 +87,76 @@ func (msgs Messages) TrayIconStyleNote() string {
 	return Catalog.Format(msgs.locale, "trayIconStyleNote", nil)
 }
 
+// TrayClick says "When clicking the tray icon"
+// in the language the app shows.
+func TrayClick() string { return In(i18n.Locale()).TrayClick() }
+
+// TrayClick says "When clicking the tray icon"
+// in the language of msgs.
+func (msgs Messages) TrayClick() string {
+	return Catalog.Format(msgs.locale, "trayClick", nil)
+}
+
+// TrayClickNote says "Choose whether a tray click opens the host popup or the main window."
+// in the language the app shows.
+func TrayClickNote() string { return In(i18n.Locale()).TrayClickNote() }
+
+// TrayClickNote says "Choose whether a tray click opens the host popup or the main window."
+// in the language of msgs.
+func (msgs Messages) TrayClickNote() string {
+	return Catalog.Format(msgs.locale, "trayClickNote", nil)
+}
+
+// TrayClickPanel says "Host popup"
+// in the language the app shows.
+func TrayClickPanel() string { return In(i18n.Locale()).TrayClickPanel() }
+
+// TrayClickPanel says "Host popup"
+// in the language of msgs.
+func (msgs Messages) TrayClickPanel() string {
+	return Catalog.Format(msgs.locale, "trayClickPanel", nil)
+}
+
+// TrayClickWindow says "Main window"
+// in the language the app shows.
+func TrayClickWindow() string { return In(i18n.Locale()).TrayClickWindow() }
+
+// TrayClickWindow says "Main window"
+// in the language of msgs.
+func (msgs Messages) TrayClickWindow() string {
+	return Catalog.Format(msgs.locale, "trayClickWindow", nil)
+}
+
+// TrayMaterial says "Tray popup material"
+// in the language the app shows.
+func TrayMaterial() string { return In(i18n.Locale()).TrayMaterial() }
+
+// TrayMaterial says "Tray popup material"
+// in the language of msgs.
+func (msgs Messages) TrayMaterial() string {
+	return Catalog.Format(msgs.locale, "trayMaterial", nil)
+}
+
+// TrayMaterialNote says "Set the tray popup material independently of the main window."
+// in the language the app shows.
+func TrayMaterialNote() string { return In(i18n.Locale()).TrayMaterialNote() }
+
+// TrayMaterialNote says "Set the tray popup material independently of the main window."
+// in the language of msgs.
+func (msgs Messages) TrayMaterialNote() string {
+	return Catalog.Format(msgs.locale, "trayMaterialNote", nil)
+}
+
+// TrayResizeHeight says "Drag to resize popup height"
+// in the language the app shows.
+func TrayResizeHeight() string { return In(i18n.Locale()).TrayResizeHeight() }
+
+// TrayResizeHeight says "Drag to resize popup height"
+// in the language of msgs.
+func (msgs Messages) TrayResizeHeight() string {
+	return Catalog.Format(msgs.locale, "trayResizeHeight", nil)
+}
+
 // TrayIconFailed says "Could not update the system tray icon."
 // in the language the app shows.
 func TrayIconFailed() string { return In(i18n.Locale()).TrayIconFailed() }
@@ -185,6 +255,46 @@ func CloseBehaviorNote() string { return In(i18n.Locale()).CloseBehaviorNote() }
 // in the language of msgs.
 func (msgs Messages) CloseBehaviorNote() string {
 	return Catalog.Format(msgs.locale, "closeBehaviorNote", nil)
+}
+
+// TrayOpenHosts says "Open Host Popup"
+// in the language the app shows.
+func TrayOpenHosts() string { return In(i18n.Locale()).TrayOpenHosts() }
+
+// TrayOpenHosts says "Open Host Popup"
+// in the language of msgs.
+func (msgs Messages) TrayOpenHosts() string {
+	return Catalog.Format(msgs.locale, "trayOpenHosts", nil)
+}
+
+// TrayOpenPanel says "Open Main Panel"
+// in the language the app shows.
+func TrayOpenPanel() string { return In(i18n.Locale()).TrayOpenPanel() }
+
+// TrayOpenPanel says "Open Main Panel"
+// in the language of msgs.
+func (msgs Messages) TrayOpenPanel() string {
+	return Catalog.Format(msgs.locale, "trayOpenPanel", nil)
+}
+
+// TrayShortcuts says "Shortcuts"
+// in the language the app shows.
+func TrayShortcuts() string { return In(i18n.Locale()).TrayShortcuts() }
+
+// TrayShortcuts says "Shortcuts"
+// in the language of msgs.
+func (msgs Messages) TrayShortcuts() string {
+	return Catalog.Format(msgs.locale, "trayShortcuts", nil)
+}
+
+// TrayPanelFailed says "Could not open the tray panel."
+// in the language the app shows.
+func TrayPanelFailed() string { return In(i18n.Locale()).TrayPanelFailed() }
+
+// TrayPanelFailed says "Could not open the tray panel."
+// in the language of msgs.
+func (msgs Messages) TrayPanelFailed() string {
+	return Catalog.Format(msgs.locale, "trayPanelFailed", nil)
 }
 
 // TrayShowWindow says "Show SSHYard"
@@ -1783,6 +1893,98 @@ func ClearSearch() string { return In(i18n.Locale()).ClearSearch() }
 // in the language of msgs.
 func (msgs Messages) ClearSearch() string {
 	return Catalog.Format(msgs.locale, "clearSearch", nil)
+}
+
+// TestLatency says "Test latency"
+// in the language the app shows.
+func TestLatency() string { return In(i18n.Locale()).TestLatency() }
+
+// TestLatency says "Test latency"
+// in the language of msgs.
+func (msgs Messages) TestLatency() string {
+	return Catalog.Format(msgs.locale, "testLatency", nil)
+}
+
+// CloseSearch says "Close search"
+// in the language the app shows.
+func CloseSearch() string { return In(i18n.Locale()).CloseSearch() }
+
+// CloseSearch says "Close search"
+// in the language of msgs.
+func (msgs Messages) CloseSearch() string {
+	return Catalog.Format(msgs.locale, "closeSearch", nil)
+}
+
+// HostUnreachable says "No reply"
+// in the language the app shows.
+func HostUnreachable() string { return In(i18n.Locale()).HostUnreachable() }
+
+// HostUnreachable says "No reply"
+// in the language of msgs.
+func (msgs Messages) HostUnreachable() string {
+	return Catalog.Format(msgs.locale, "hostUnreachable", nil)
+}
+
+// MultiSelect says "Select multiple"
+// in the language the app shows.
+func MultiSelect() string { return In(i18n.Locale()).MultiSelect() }
+
+// MultiSelect says "Select multiple"
+// in the language of msgs.
+func (msgs Messages) MultiSelect() string {
+	return Catalog.Format(msgs.locale, "multiSelect", nil)
+}
+
+// CloseMultiSelect says "Exit selection"
+// in the language the app shows.
+func CloseMultiSelect() string { return In(i18n.Locale()).CloseMultiSelect() }
+
+// CloseMultiSelect says "Exit selection"
+// in the language of msgs.
+func (msgs Messages) CloseMultiSelect() string {
+	return Catalog.Format(msgs.locale, "closeMultiSelect", nil)
+}
+
+// SelectedCount says "{count} selected"
+// in the language the app shows.
+func SelectedCount(count string) string { return In(i18n.Locale()).SelectedCount(count) }
+
+// SelectedCount says "{count} selected"
+// in the language of msgs.
+func (msgs Messages) SelectedCount(count string) string {
+	return Catalog.Format(msgs.locale, "selectedCount", map[string]any{"count": count})
+}
+
+// DeleteSelected says "Delete selected"
+// in the language the app shows.
+func DeleteSelected() string { return In(i18n.Locale()).DeleteSelected() }
+
+// DeleteSelected says "Delete selected"
+// in the language of msgs.
+func (msgs Messages) DeleteSelected() string {
+	return Catalog.Format(msgs.locale, "deleteSelected", nil)
+}
+
+// DeleteSelectedConfirm says "Delete the {count} selected items?"
+// in the language the app shows.
+func DeleteSelectedConfirm(count string) string {
+	return In(i18n.Locale()).DeleteSelectedConfirm(count)
+}
+
+// DeleteSelectedConfirm says "Delete the {count} selected items?"
+// in the language of msgs.
+func (msgs Messages) DeleteSelectedConfirm(count string) string {
+	return Catalog.Format(msgs.locale, "deleteSelectedConfirm", map[string]any{"count": count})
+}
+
+// TestingLatency says "Testing latency"
+// in the language the app shows.
+func TestingLatency() string { return In(i18n.Locale()).TestingLatency() }
+
+// TestingLatency says "Testing latency"
+// in the language of msgs.
+func (msgs Messages) TestingLatency() string {
+	return Catalog.Format(msgs.locale, "testingLatency", nil)
 }
 
 // InterfaceFont says "Interface font"
@@ -6253,6 +6455,26 @@ func (msgs Messages) AiContextLines() string {
 	return Catalog.Format(msgs.locale, "aiContextLines", nil)
 }
 
+// AiMaxToolCalls says "Tool calls per turn"
+// in the language the app shows.
+func AiMaxToolCalls() string { return In(i18n.Locale()).AiMaxToolCalls() }
+
+// AiMaxToolCalls says "Tool calls per turn"
+// in the language of msgs.
+func (msgs Messages) AiMaxToolCalls() string {
+	return Catalog.Format(msgs.locale, "aiMaxToolCalls", nil)
+}
+
+// AiMaxToolCallsNote says "Pauses for your go-ahead at the limit. Enter 0 for no limit; leave empty for the default"
+// in the language the app shows.
+func AiMaxToolCallsNote() string { return In(i18n.Locale()).AiMaxToolCallsNote() }
+
+// AiMaxToolCallsNote says "Pauses for your go-ahead at the limit. Enter 0 for no limit; leave empty for the default"
+// in the language of msgs.
+func (msgs Messages) AiMaxToolCallsNote() string {
+	return Catalog.Format(msgs.locale, "aiMaxToolCallsNote", nil)
+}
+
 // AiAuditDays says "Audit retention (days)"
 // in the language the app shows.
 func AiAuditDays() string { return In(i18n.Locale()).AiAuditDays() }
@@ -6483,14 +6705,14 @@ func (msgs Messages) AiWorking() string {
 	return Catalog.Format(msgs.locale, "aiWorking", nil)
 }
 
-// AiPaused says "Paused after 25 tool calls."
+// AiPaused says "{count, plural, one {Paused after # tool call.} other {Paused after # tool calls.}}"
 // in the language the app shows.
-func AiPaused() string { return In(i18n.Locale()).AiPaused() }
+func AiPaused(count int) string { return In(i18n.Locale()).AiPaused(count) }
 
-// AiPaused says "Paused after 25 tool calls."
+// AiPaused says "{count, plural, one {Paused after # tool call.} other {Paused after # tool calls.}}"
 // in the language of msgs.
-func (msgs Messages) AiPaused() string {
-	return Catalog.Format(msgs.locale, "aiPaused", nil)
+func (msgs Messages) AiPaused(count int) string {
+	return Catalog.Format(msgs.locale, "aiPaused", map[string]any{"count": count})
 }
 
 // AiContinue says "Continue"
@@ -7543,16 +7765,6 @@ func (msgs Messages) HostDetails() string {
 	return Catalog.Format(msgs.locale, "hostDetails", nil)
 }
 
-// ClosePanel says "Close Panel"
-// in the language the app shows.
-func ClosePanel() string { return In(i18n.Locale()).ClosePanel() }
-
-// ClosePanel says "Close Panel"
-// in the language of msgs.
-func (msgs Messages) ClosePanel() string {
-	return Catalog.Format(msgs.locale, "closePanel", nil)
-}
-
 // InspectorEmpty says "Open a session to see its host here."
 // in the language the app shows.
 func InspectorEmpty() string { return In(i18n.Locale()).InspectorEmpty() }
@@ -7973,14 +8185,34 @@ func (msgs Messages) NewGroupEllipsis() string {
 	return Catalog.Format(msgs.locale, "newGroupEllipsis", nil)
 }
 
-// RenameGroup says "Rename group"
+// EditGroup says "Edit group"
 // in the language the app shows.
-func RenameGroup() string { return In(i18n.Locale()).RenameGroup() }
+func EditGroup() string { return In(i18n.Locale()).EditGroup() }
 
-// RenameGroup says "Rename group"
+// EditGroup says "Edit group"
 // in the language of msgs.
-func (msgs Messages) RenameGroup() string {
-	return Catalog.Format(msgs.locale, "renameGroup", nil)
+func (msgs Messages) EditGroup() string {
+	return Catalog.Format(msgs.locale, "editGroup", nil)
+}
+
+// GroupFolderIcon says "Folder icon"
+// in the language the app shows.
+func GroupFolderIcon() string { return In(i18n.Locale()).GroupFolderIcon() }
+
+// GroupFolderIcon says "Folder icon"
+// in the language of msgs.
+func (msgs Messages) GroupFolderIcon() string {
+	return Catalog.Format(msgs.locale, "groupFolderIcon", nil)
+}
+
+// GroupDefaultColor says "Default color"
+// in the language the app shows.
+func GroupDefaultColor() string { return In(i18n.Locale()).GroupDefaultColor() }
+
+// GroupDefaultColor says "Default color"
+// in the language of msgs.
+func (msgs Messages) GroupDefaultColor() string {
+	return Catalog.Format(msgs.locale, "groupDefaultColor", nil)
 }
 
 // DeleteGroup says "Delete group"
@@ -8041,6 +8273,58 @@ func NewHostInGroup() string { return In(i18n.Locale()).NewHostInGroup() }
 // in the language of msgs.
 func (msgs Messages) NewHostInGroup() string {
 	return Catalog.Format(msgs.locale, "newHostInGroup", nil)
+}
+
+// NewSubgroup says "New subgroup"
+// in the language the app shows.
+func NewSubgroup() string { return In(i18n.Locale()).NewSubgroup() }
+
+// NewSubgroup says "New subgroup"
+// in the language of msgs.
+func (msgs Messages) NewSubgroup() string {
+	return Catalog.Format(msgs.locale, "newSubgroup", nil)
+}
+
+// SubgroupOf says "In {group}"
+// in the language the app shows.
+func SubgroupOf(group string) string { return In(i18n.Locale()).SubgroupOf(group) }
+
+// SubgroupOf says "In {group}"
+// in the language of msgs.
+func (msgs Messages) SubgroupOf(group string) string {
+	return Catalog.Format(msgs.locale, "subgroupOf", map[string]any{"group": group})
+}
+
+// GroupNameSlash says "A group name cannot contain /."
+// in the language the app shows.
+func GroupNameSlash() string { return In(i18n.Locale()).GroupNameSlash() }
+
+// GroupNameSlash says "A group name cannot contain /."
+// in the language of msgs.
+func (msgs Messages) GroupNameSlash() string {
+	return Catalog.Format(msgs.locale, "groupNameSlash", nil)
+}
+
+// GroupIntoItself says "A group cannot move into itself or one of its subgroups."
+// in the language the app shows.
+func GroupIntoItself() string { return In(i18n.Locale()).GroupIntoItself() }
+
+// GroupIntoItself says "A group cannot move into itself or one of its subgroups."
+// in the language of msgs.
+func (msgs Messages) GroupIntoItself() string {
+	return Catalog.Format(msgs.locale, "groupIntoItself", nil)
+}
+
+// DeleteGroupTreeConfirm says "Delete the group {group} and its subgroups? Their hosts are kept, without a group."
+// in the language the app shows.
+func DeleteGroupTreeConfirm(group string) string {
+	return In(i18n.Locale()).DeleteGroupTreeConfirm(group)
+}
+
+// DeleteGroupTreeConfirm says "Delete the group {group} and its subgroups? Their hosts are kept, without a group."
+// in the language of msgs.
+func (msgs Messages) DeleteGroupTreeConfirm(group string) string {
+	return Catalog.Format(msgs.locale, "deleteGroupTreeConfirm", map[string]any{"group": group})
 }
 
 // MoveToGroup says "Move to group"
@@ -8923,6 +9207,466 @@ func DockerNoLogs() string { return In(i18n.Locale()).DockerNoLogs() }
 // in the language of msgs.
 func (msgs Messages) DockerNoLogs() string {
 	return Catalog.Format(msgs.locale, "dockerNoLogs", nil)
+}
+
+// DockerDetails says "Details"
+// in the language the app shows.
+func DockerDetails() string { return In(i18n.Locale()).DockerDetails() }
+
+// DockerDetails says "Details"
+// in the language of msgs.
+func (msgs Messages) DockerDetails() string {
+	return Catalog.Format(msgs.locale, "dockerDetails", nil)
+}
+
+// DockerResources says "Resource Usage"
+// in the language the app shows.
+func DockerResources() string { return In(i18n.Locale()).DockerResources() }
+
+// DockerResources says "Resource Usage"
+// in the language of msgs.
+func (msgs Messages) DockerResources() string {
+	return Catalog.Format(msgs.locale, "dockerResources", nil)
+}
+
+// DockerPIDs says "Processes"
+// in the language the app shows.
+func DockerPIDs() string { return In(i18n.Locale()).DockerPIDs() }
+
+// DockerPIDs says "Processes"
+// in the language of msgs.
+func (msgs Messages) DockerPIDs() string {
+	return Catalog.Format(msgs.locale, "dockerPIDs", nil)
+}
+
+// DockerNetIO says "Network I/O"
+// in the language the app shows.
+func DockerNetIO() string { return In(i18n.Locale()).DockerNetIO() }
+
+// DockerNetIO says "Network I/O"
+// in the language of msgs.
+func (msgs Messages) DockerNetIO() string {
+	return Catalog.Format(msgs.locale, "dockerNetIO", nil)
+}
+
+// DockerBlockIO says "Disk I/O"
+// in the language the app shows.
+func DockerBlockIO() string { return In(i18n.Locale()).DockerBlockIO() }
+
+// DockerBlockIO says "Disk I/O"
+// in the language of msgs.
+func (msgs Messages) DockerBlockIO() string {
+	return Catalog.Format(msgs.locale, "dockerBlockIO", nil)
+}
+
+// DockerOverview says "Overview"
+// in the language the app shows.
+func DockerOverview() string { return In(i18n.Locale()).DockerOverview() }
+
+// DockerOverview says "Overview"
+// in the language of msgs.
+func (msgs Messages) DockerOverview() string {
+	return Catalog.Format(msgs.locale, "dockerOverview", nil)
+}
+
+// DockerStarted says "Started"
+// in the language the app shows.
+func DockerStarted() string { return In(i18n.Locale()).DockerStarted() }
+
+// DockerStarted says "Started"
+// in the language of msgs.
+func (msgs Messages) DockerStarted() string {
+	return Catalog.Format(msgs.locale, "dockerStarted", nil)
+}
+
+// DockerFinished says "Finished"
+// in the language the app shows.
+func DockerFinished() string { return In(i18n.Locale()).DockerFinished() }
+
+// DockerFinished says "Finished"
+// in the language of msgs.
+func (msgs Messages) DockerFinished() string {
+	return Catalog.Format(msgs.locale, "dockerFinished", nil)
+}
+
+// DockerExitCode says "Exit code"
+// in the language the app shows.
+func DockerExitCode() string { return In(i18n.Locale()).DockerExitCode() }
+
+// DockerExitCode says "Exit code"
+// in the language of msgs.
+func (msgs Messages) DockerExitCode() string {
+	return Catalog.Format(msgs.locale, "dockerExitCode", nil)
+}
+
+// DockerHealth says "Health"
+// in the language the app shows.
+func DockerHealth() string { return In(i18n.Locale()).DockerHealth() }
+
+// DockerHealth says "Health"
+// in the language of msgs.
+func (msgs Messages) DockerHealth() string {
+	return Catalog.Format(msgs.locale, "dockerHealth", nil)
+}
+
+// DockerRestartPolicy says "Restart policy"
+// in the language the app shows.
+func DockerRestartPolicy() string { return In(i18n.Locale()).DockerRestartPolicy() }
+
+// DockerRestartPolicy says "Restart policy"
+// in the language of msgs.
+func (msgs Messages) DockerRestartPolicy() string {
+	return Catalog.Format(msgs.locale, "dockerRestartPolicy", nil)
+}
+
+// DockerRestartCount says "Restarts"
+// in the language the app shows.
+func DockerRestartCount() string { return In(i18n.Locale()).DockerRestartCount() }
+
+// DockerRestartCount says "Restarts"
+// in the language of msgs.
+func (msgs Messages) DockerRestartCount() string {
+	return Catalog.Format(msgs.locale, "dockerRestartCount", nil)
+}
+
+// DockerMainPID says "Main PID"
+// in the language the app shows.
+func DockerMainPID() string { return In(i18n.Locale()).DockerMainPID() }
+
+// DockerMainPID says "Main PID"
+// in the language of msgs.
+func (msgs Messages) DockerMainPID() string {
+	return Catalog.Format(msgs.locale, "dockerMainPID", nil)
+}
+
+// DockerCommand says "Command"
+// in the language the app shows.
+func DockerCommand() string { return In(i18n.Locale()).DockerCommand() }
+
+// DockerCommand says "Command"
+// in the language of msgs.
+func (msgs Messages) DockerCommand() string {
+	return Catalog.Format(msgs.locale, "dockerCommand", nil)
+}
+
+// DockerWorkDir says "Working directory"
+// in the language the app shows.
+func DockerWorkDir() string { return In(i18n.Locale()).DockerWorkDir() }
+
+// DockerWorkDir says "Working directory"
+// in the language of msgs.
+func (msgs Messages) DockerWorkDir() string {
+	return Catalog.Format(msgs.locale, "dockerWorkDir", nil)
+}
+
+// DockerUser says "User"
+// in the language the app shows.
+func DockerUser() string { return In(i18n.Locale()).DockerUser() }
+
+// DockerUser says "User"
+// in the language of msgs.
+func (msgs Messages) DockerUser() string {
+	return Catalog.Format(msgs.locale, "dockerUser", nil)
+}
+
+// DockerHostname says "Hostname"
+// in the language the app shows.
+func DockerHostname() string { return In(i18n.Locale()).DockerHostname() }
+
+// DockerHostname says "Hostname"
+// in the language of msgs.
+func (msgs Messages) DockerHostname() string {
+	return Catalog.Format(msgs.locale, "dockerHostname", nil)
+}
+
+// DockerNetworkMode says "Network mode"
+// in the language the app shows.
+func DockerNetworkMode() string { return In(i18n.Locale()).DockerNetworkMode() }
+
+// DockerNetworkMode says "Network mode"
+// in the language of msgs.
+func (msgs Messages) DockerNetworkMode() string {
+	return Catalog.Format(msgs.locale, "dockerNetworkMode", nil)
+}
+
+// DockerMemLimit says "Memory limit"
+// in the language the app shows.
+func DockerMemLimit() string { return In(i18n.Locale()).DockerMemLimit() }
+
+// DockerMemLimit says "Memory limit"
+// in the language of msgs.
+func (msgs Messages) DockerMemLimit() string {
+	return Catalog.Format(msgs.locale, "dockerMemLimit", nil)
+}
+
+// DockerCPULimit says "CPU limit"
+// in the language the app shows.
+func DockerCPULimit() string { return In(i18n.Locale()).DockerCPULimit() }
+
+// DockerCPULimit says "CPU limit"
+// in the language of msgs.
+func (msgs Messages) DockerCPULimit() string {
+	return Catalog.Format(msgs.locale, "dockerCPULimit", nil)
+}
+
+// DockerUnlimited says "Unlimited"
+// in the language the app shows.
+func DockerUnlimited() string { return In(i18n.Locale()).DockerUnlimited() }
+
+// DockerUnlimited says "Unlimited"
+// in the language of msgs.
+func (msgs Messages) DockerUnlimited() string {
+	return Catalog.Format(msgs.locale, "dockerUnlimited", nil)
+}
+
+// DockerCPUs says "{n} CPUs"
+// in the language the app shows.
+func DockerCPUs(n string) string { return In(i18n.Locale()).DockerCPUs(n) }
+
+// DockerCPUs says "{n} CPUs"
+// in the language of msgs.
+func (msgs Messages) DockerCPUs(n string) string {
+	return Catalog.Format(msgs.locale, "dockerCPUs", map[string]any{"n": n})
+}
+
+// DockerPrivileged says "Privileged"
+// in the language the app shows.
+func DockerPrivileged() string { return In(i18n.Locale()).DockerPrivileged() }
+
+// DockerPrivileged says "Privileged"
+// in the language of msgs.
+func (msgs Messages) DockerPrivileged() string {
+	return Catalog.Format(msgs.locale, "dockerPrivileged", nil)
+}
+
+// DockerYes says "Yes"
+// in the language the app shows.
+func DockerYes() string { return In(i18n.Locale()).DockerYes() }
+
+// DockerYes says "Yes"
+// in the language of msgs.
+func (msgs Messages) DockerYes() string {
+	return Catalog.Format(msgs.locale, "dockerYes", nil)
+}
+
+// DockerNo says "No"
+// in the language the app shows.
+func DockerNo() string { return In(i18n.Locale()).DockerNo() }
+
+// DockerNo says "No"
+// in the language of msgs.
+func (msgs Messages) DockerNo() string {
+	return Catalog.Format(msgs.locale, "dockerNo", nil)
+}
+
+// DockerNetworks says "Networks"
+// in the language the app shows.
+func DockerNetworks() string { return In(i18n.Locale()).DockerNetworks() }
+
+// DockerNetworks says "Networks"
+// in the language of msgs.
+func (msgs Messages) DockerNetworks() string {
+	return Catalog.Format(msgs.locale, "dockerNetworks", nil)
+}
+
+// DockerGateway says "Gateway"
+// in the language the app shows.
+func DockerGateway() string { return In(i18n.Locale()).DockerGateway() }
+
+// DockerGateway says "Gateway"
+// in the language of msgs.
+func (msgs Messages) DockerGateway() string {
+	return Catalog.Format(msgs.locale, "dockerGateway", nil)
+}
+
+// DockerMounts says "Mounts"
+// in the language the app shows.
+func DockerMounts() string { return In(i18n.Locale()).DockerMounts() }
+
+// DockerMounts says "Mounts"
+// in the language of msgs.
+func (msgs Messages) DockerMounts() string {
+	return Catalog.Format(msgs.locale, "dockerMounts", nil)
+}
+
+// DockerReadOnly says "Read-only"
+// in the language the app shows.
+func DockerReadOnly() string { return In(i18n.Locale()).DockerReadOnly() }
+
+// DockerReadOnly says "Read-only"
+// in the language of msgs.
+func (msgs Messages) DockerReadOnly() string {
+	return Catalog.Format(msgs.locale, "dockerReadOnly", nil)
+}
+
+// DockerReadWrite says "Read-write"
+// in the language the app shows.
+func DockerReadWrite() string { return In(i18n.Locale()).DockerReadWrite() }
+
+// DockerReadWrite says "Read-write"
+// in the language of msgs.
+func (msgs Messages) DockerReadWrite() string {
+	return Catalog.Format(msgs.locale, "dockerReadWrite", nil)
+}
+
+// DockerEnv says "Environment"
+// in the language the app shows.
+func DockerEnv() string { return In(i18n.Locale()).DockerEnv() }
+
+// DockerEnv says "Environment"
+// in the language of msgs.
+func (msgs Messages) DockerEnv() string {
+	return Catalog.Format(msgs.locale, "dockerEnv", nil)
+}
+
+// DockerLabels says "Labels"
+// in the language the app shows.
+func DockerLabels() string { return In(i18n.Locale()).DockerLabels() }
+
+// DockerLabels says "Labels"
+// in the language of msgs.
+func (msgs Messages) DockerLabels() string {
+	return Catalog.Format(msgs.locale, "dockerLabels", nil)
+}
+
+// DockerProcesses says "Processes"
+// in the language the app shows.
+func DockerProcesses() string { return In(i18n.Locale()).DockerProcesses() }
+
+// DockerProcesses says "Processes"
+// in the language of msgs.
+func (msgs Messages) DockerProcesses() string {
+	return Catalog.Format(msgs.locale, "dockerProcesses", nil)
+}
+
+// DockerNotRunning says "The container is not running, so it uses no resources and has no processes."
+// in the language the app shows.
+func DockerNotRunning() string { return In(i18n.Locale()).DockerNotRunning() }
+
+// DockerNotRunning says "The container is not running, so it uses no resources and has no processes."
+// in the language of msgs.
+func (msgs Messages) DockerNotRunning() string {
+	return Catalog.Format(msgs.locale, "dockerNotRunning", nil)
+}
+
+// DockerPickImage says "Select an image to see its details."
+// in the language the app shows.
+func DockerPickImage() string { return In(i18n.Locale()).DockerPickImage() }
+
+// DockerPickImage says "Select an image to see its details."
+// in the language of msgs.
+func (msgs Messages) DockerPickImage() string {
+	return Catalog.Format(msgs.locale, "dockerPickImage", nil)
+}
+
+// DockerRepoTags says "Tags"
+// in the language the app shows.
+func DockerRepoTags() string { return In(i18n.Locale()).DockerRepoTags() }
+
+// DockerRepoTags says "Tags"
+// in the language of msgs.
+func (msgs Messages) DockerRepoTags() string {
+	return Catalog.Format(msgs.locale, "dockerRepoTags", nil)
+}
+
+// DockerDigests says "Digests"
+// in the language the app shows.
+func DockerDigests() string { return In(i18n.Locale()).DockerDigests() }
+
+// DockerDigests says "Digests"
+// in the language of msgs.
+func (msgs Messages) DockerDigests() string {
+	return Catalog.Format(msgs.locale, "dockerDigests", nil)
+}
+
+// DockerPlatform says "Platform"
+// in the language the app shows.
+func DockerPlatform() string { return In(i18n.Locale()).DockerPlatform() }
+
+// DockerPlatform says "Platform"
+// in the language of msgs.
+func (msgs Messages) DockerPlatform() string {
+	return Catalog.Format(msgs.locale, "dockerPlatform", nil)
+}
+
+// DockerAuthor says "Author"
+// in the language the app shows.
+func DockerAuthor() string { return In(i18n.Locale()).DockerAuthor() }
+
+// DockerAuthor says "Author"
+// in the language of msgs.
+func (msgs Messages) DockerAuthor() string {
+	return Catalog.Format(msgs.locale, "dockerAuthor", nil)
+}
+
+// DockerBuiltWith says "Docker version"
+// in the language the app shows.
+func DockerBuiltWith() string { return In(i18n.Locale()).DockerBuiltWith() }
+
+// DockerBuiltWith says "Docker version"
+// in the language of msgs.
+func (msgs Messages) DockerBuiltWith() string {
+	return Catalog.Format(msgs.locale, "dockerBuiltWith", nil)
+}
+
+// DockerLayers says "Layers"
+// in the language the app shows.
+func DockerLayers() string { return In(i18n.Locale()).DockerLayers() }
+
+// DockerLayers says "Layers"
+// in the language of msgs.
+func (msgs Messages) DockerLayers() string {
+	return Catalog.Format(msgs.locale, "dockerLayers", nil)
+}
+
+// DockerEntrypoint says "Entrypoint"
+// in the language the app shows.
+func DockerEntrypoint() string { return In(i18n.Locale()).DockerEntrypoint() }
+
+// DockerEntrypoint says "Entrypoint"
+// in the language of msgs.
+func (msgs Messages) DockerEntrypoint() string {
+	return Catalog.Format(msgs.locale, "dockerEntrypoint", nil)
+}
+
+// DockerExposed says "Exposed ports"
+// in the language the app shows.
+func DockerExposed() string { return In(i18n.Locale()).DockerExposed() }
+
+// DockerExposed says "Exposed ports"
+// in the language of msgs.
+func (msgs Messages) DockerExposed() string {
+	return Catalog.Format(msgs.locale, "dockerExposed", nil)
+}
+
+// DockerVolumes says "Volumes"
+// in the language the app shows.
+func DockerVolumes() string { return In(i18n.Locale()).DockerVolumes() }
+
+// DockerVolumes says "Volumes"
+// in the language of msgs.
+func (msgs Messages) DockerVolumes() string {
+	return Catalog.Format(msgs.locale, "dockerVolumes", nil)
+}
+
+// DockerHistory says "Build history"
+// in the language the app shows.
+func DockerHistory() string { return In(i18n.Locale()).DockerHistory() }
+
+// DockerHistory says "Build history"
+// in the language of msgs.
+func (msgs Messages) DockerHistory() string {
+	return Catalog.Format(msgs.locale, "dockerHistory", nil)
+}
+
+// DockerImageUnused says "No container uses this image."
+// in the language the app shows.
+func DockerImageUnused() string { return In(i18n.Locale()).DockerImageUnused() }
+
+// DockerImageUnused says "No container uses this image."
+// in the language of msgs.
+func (msgs Messages) DockerImageUnused() string {
+	return Catalog.Format(msgs.locale, "dockerImageUnused", nil)
 }
 
 // TmuxManager says "tmux Sessions"
@@ -12485,6 +13229,38 @@ func (msgs Messages) SnippetPreview(name string) string {
 	return Catalog.Format(msgs.locale, "snippetPreview", map[string]any{"name": name})
 }
 
+// SnippetEditAction says "Edit {name}"
+// in the language the app shows.
+func SnippetEditAction(name string) string { return In(i18n.Locale()).SnippetEditAction(name) }
+
+// SnippetEditAction says "Edit {name}"
+// in the language of msgs.
+func (msgs Messages) SnippetEditAction(name string) string {
+	return Catalog.Format(msgs.locale, "snippetEditAction", map[string]any{"name": name})
+}
+
+// SnippetDuplicateAction says "Duplicate {name}"
+// in the language the app shows.
+func SnippetDuplicateAction(name string) string {
+	return In(i18n.Locale()).SnippetDuplicateAction(name)
+}
+
+// SnippetDuplicateAction says "Duplicate {name}"
+// in the language of msgs.
+func (msgs Messages) SnippetDuplicateAction(name string) string {
+	return Catalog.Format(msgs.locale, "snippetDuplicateAction", map[string]any{"name": name})
+}
+
+// SnippetDeleteAction says "Delete {name}"
+// in the language the app shows.
+func SnippetDeleteAction(name string) string { return In(i18n.Locale()).SnippetDeleteAction(name) }
+
+// SnippetDeleteAction says "Delete {name}"
+// in the language of msgs.
+func (msgs Messages) SnippetDeleteAction(name string) string {
+	return Catalog.Format(msgs.locale, "snippetDeleteAction", map[string]any{"name": name})
+}
+
 // SnippetMore says "More actions for {name}"
 // in the language the app shows.
 func SnippetMore(name string) string { return In(i18n.Locale()).SnippetMore(name) }
@@ -13463,6 +14239,46 @@ func AiToolWriteFile() string { return In(i18n.Locale()).AiToolWriteFile() }
 // in the language of msgs.
 func (msgs Messages) AiToolWriteFile() string {
 	return Catalog.Format(msgs.locale, "aiToolWriteFile", nil)
+}
+
+// AiToolTerminalSend says "Type in terminal"
+// in the language the app shows.
+func AiToolTerminalSend() string { return In(i18n.Locale()).AiToolTerminalSend() }
+
+// AiToolTerminalSend says "Type in terminal"
+// in the language of msgs.
+func (msgs Messages) AiToolTerminalSend() string {
+	return Catalog.Format(msgs.locale, "aiToolTerminalSend", nil)
+}
+
+// AiToolTerminalKey says "Press key in terminal"
+// in the language the app shows.
+func AiToolTerminalKey() string { return In(i18n.Locale()).AiToolTerminalKey() }
+
+// AiToolTerminalKey says "Press key in terminal"
+// in the language of msgs.
+func (msgs Messages) AiToolTerminalKey() string {
+	return Catalog.Format(msgs.locale, "aiToolTerminalKey", nil)
+}
+
+// AiEmptyTerminal says "Answers draw on this tab’s terminal. The assistant works by typing into it, with no file access; what it types foll…"
+// in the language the app shows.
+func AiEmptyTerminal() string { return In(i18n.Locale()).AiEmptyTerminal() }
+
+// AiEmptyTerminal says "Answers draw on this tab’s terminal. The assistant works by typing into it, with no file access; what it types foll…"
+// in the language of msgs.
+func (msgs Messages) AiEmptyTerminal() string {
+	return Catalog.Format(msgs.locale, "aiEmptyTerminal", nil)
+}
+
+// AiACPNeedsSSH says "External agents need an SSH host. Switch to the built-in assistant to work in this terminal."
+// in the language the app shows.
+func AiACPNeedsSSH() string { return In(i18n.Locale()).AiACPNeedsSSH() }
+
+// AiACPNeedsSSH says "External agents need an SSH host. Switch to the built-in assistant to work in this terminal."
+// in the language of msgs.
+func (msgs Messages) AiACPNeedsSSH() string {
+	return Catalog.Format(msgs.locale, "aiACPNeedsSSH", nil)
 }
 
 // AiToolAction says "Tool action"
@@ -16639,4 +17455,264 @@ func LogRecentNone() string { return In(i18n.Locale()).LogRecentNone() }
 // in the language of msgs.
 func (msgs Messages) LogRecentNone() string {
 	return Catalog.Format(msgs.locale, "logRecentNone", nil)
+}
+
+// CommandHistory says "Command History"
+// in the language the app shows.
+func CommandHistory() string { return In(i18n.Locale()).CommandHistory() }
+
+// CommandHistory says "Command History"
+// in the language of msgs.
+func (msgs Messages) CommandHistory() string {
+	return Catalog.Format(msgs.locale, "commandHistory", nil)
+}
+
+// HistoryNoSession says "Open a terminal to see the commands run on its host."
+// in the language the app shows.
+func HistoryNoSession() string { return In(i18n.Locale()).HistoryNoSession() }
+
+// HistoryNoSession says "Open a terminal to see the commands run on its host."
+// in the language of msgs.
+func (msgs Messages) HistoryNoSession() string {
+	return Catalog.Format(msgs.locale, "historyNoSession", nil)
+}
+
+// HistoryStream says "Command history needs SSH or a local shell. This pane is a Telnet or serial terminal."
+// in the language the app shows.
+func HistoryStream() string { return In(i18n.Locale()).HistoryStream() }
+
+// HistoryStream says "Command history needs SSH or a local shell. This pane is a Telnet or serial terminal."
+// in the language of msgs.
+func (msgs Messages) HistoryStream() string {
+	return Catalog.Format(msgs.locale, "historyStream", nil)
+}
+
+// HistoryNoTerminal says "Open a terminal on this host to read its command history."
+// in the language the app shows.
+func HistoryNoTerminal() string { return In(i18n.Locale()).HistoryNoTerminal() }
+
+// HistoryNoTerminal says "Open a terminal on this host to read its command history."
+// in the language of msgs.
+func (msgs Messages) HistoryNoTerminal() string {
+	return Catalog.Format(msgs.locale, "historyNoTerminal", nil)
+}
+
+// HistoryWSL says "Command history of WSL shells is not supported yet."
+// in the language the app shows.
+func HistoryWSL() string { return In(i18n.Locale()).HistoryWSL() }
+
+// HistoryWSL says "Command history of WSL shells is not supported yet."
+// in the language of msgs.
+func (msgs Messages) HistoryWSL() string {
+	return Catalog.Format(msgs.locale, "historyWSL", nil)
+}
+
+// HistoryReading says "Reading command history…"
+// in the language the app shows.
+func HistoryReading() string { return In(i18n.Locale()).HistoryReading() }
+
+// HistoryReading says "Reading command history…"
+// in the language of msgs.
+func (msgs Messages) HistoryReading() string {
+	return Catalog.Format(msgs.locale, "historyReading", nil)
+}
+
+// HistorySearch says "Search commands"
+// in the language the app shows.
+func HistorySearch() string { return In(i18n.Locale()).HistorySearch() }
+
+// HistorySearch says "Search commands"
+// in the language of msgs.
+func (msgs Messages) HistorySearch() string {
+	return Catalog.Format(msgs.locale, "historySearch", nil)
+}
+
+// HistoryFailed says "Could not read the history: {reason}"
+// in the language the app shows.
+func HistoryFailed(reason string) string { return In(i18n.Locale()).HistoryFailed(reason) }
+
+// HistoryFailed says "Could not read the history: {reason}"
+// in the language of msgs.
+func (msgs Messages) HistoryFailed(reason string) string {
+	return Catalog.Format(msgs.locale, "historyFailed", map[string]any{"reason": reason})
+}
+
+// HistoryNoneTitle says "No command history"
+// in the language the app shows.
+func HistoryNoneTitle() string { return In(i18n.Locale()).HistoryNoneTitle() }
+
+// HistoryNoneTitle says "No command history"
+// in the language of msgs.
+func (msgs Messages) HistoryNoneTitle() string {
+	return Catalog.Format(msgs.locale, "historyNoneTitle", nil)
+}
+
+// HistoryNoneHint says "No shell history file was found for this user. Bash writes its history when a shell exits."
+// in the language the app shows.
+func HistoryNoneHint() string { return In(i18n.Locale()).HistoryNoneHint() }
+
+// HistoryNoneHint says "No shell history file was found for this user. Bash writes its history when a shell exits."
+// in the language of msgs.
+func (msgs Messages) HistoryNoneHint() string {
+	return Catalog.Format(msgs.locale, "historyNoneHint", nil)
+}
+
+// HistoryNoMatch says "No matching commands"
+// in the language the app shows.
+func HistoryNoMatch() string { return In(i18n.Locale()).HistoryNoMatch() }
+
+// HistoryNoMatch says "No matching commands"
+// in the language of msgs.
+func (msgs Messages) HistoryNoMatch() string {
+	return Catalog.Format(msgs.locale, "historyNoMatch", nil)
+}
+
+// HistoryAll says "All"
+// in the language the app shows.
+func HistoryAll() string { return In(i18n.Locale()).HistoryAll() }
+
+// HistoryAll says "All"
+// in the language of msgs.
+func (msgs Messages) HistoryAll() string {
+	return Catalog.Format(msgs.locale, "historyAll", nil)
+}
+
+// HistoryFilterShell says "Filter commands by shell"
+// in the language the app shows.
+func HistoryFilterShell() string { return In(i18n.Locale()).HistoryFilterShell() }
+
+// HistoryFilterShell says "Filter commands by shell"
+// in the language of msgs.
+func (msgs Messages) HistoryFilterShell() string {
+	return Catalog.Format(msgs.locale, "historyFilterShell", nil)
+}
+
+// HistoryToday says "Today"
+// in the language the app shows.
+func HistoryToday() string { return In(i18n.Locale()).HistoryToday() }
+
+// HistoryToday says "Today"
+// in the language of msgs.
+func (msgs Messages) HistoryToday() string {
+	return Catalog.Format(msgs.locale, "historyToday", nil)
+}
+
+// HistoryYesterday says "Yesterday"
+// in the language the app shows.
+func HistoryYesterday() string { return In(i18n.Locale()).HistoryYesterday() }
+
+// HistoryYesterday says "Yesterday"
+// in the language of msgs.
+func (msgs Messages) HistoryYesterday() string {
+	return Catalog.Format(msgs.locale, "historyYesterday", nil)
+}
+
+// HistoryUntimed says "No time recorded"
+// in the language the app shows.
+func HistoryUntimed() string { return In(i18n.Locale()).HistoryUntimed() }
+
+// HistoryUntimed says "No time recorded"
+// in the language of msgs.
+func (msgs Messages) HistoryUntimed() string {
+	return Catalog.Format(msgs.locale, "historyUntimed", nil)
+}
+
+// HistoryRuns says "{count, plural, one {# run} other {# runs}}"
+// in the language the app shows.
+func HistoryRuns(count int) string { return In(i18n.Locale()).HistoryRuns(count) }
+
+// HistoryRuns says "{count, plural, one {# run} other {# runs}}"
+// in the language of msgs.
+func (msgs Messages) HistoryRuns(count int) string {
+	return Catalog.Format(msgs.locale, "historyRuns", map[string]any{"count": count})
+}
+
+// HistoryLines says "{count, plural, one {# line} other {# lines}}"
+// in the language the app shows.
+func HistoryLines(count int) string { return In(i18n.Locale()).HistoryLines(count) }
+
+// HistoryLines says "{count, plural, one {# line} other {# lines}}"
+// in the language of msgs.
+func (msgs Messages) HistoryLines(count int) string {
+	return Catalog.Format(msgs.locale, "historyLines", map[string]any{"count": count})
+}
+
+// HistoryShowMore says "{count, plural, one {Show more (# left)} other {Show more (# left)}}"
+// in the language the app shows.
+func HistoryShowMore(count int) string { return In(i18n.Locale()).HistoryShowMore(count) }
+
+// HistoryShowMore says "{count, plural, one {Show more (# left)} other {Show more (# left)}}"
+// in the language of msgs.
+func (msgs Messages) HistoryShowMore(count int) string {
+	return Catalog.Format(msgs.locale, "historyShowMore", map[string]any{"count": count})
+}
+
+// HistoryRun says "Send to terminal and run"
+// in the language the app shows.
+func HistoryRun() string { return In(i18n.Locale()).HistoryRun() }
+
+// HistoryRun says "Send to terminal and run"
+// in the language of msgs.
+func (msgs Messages) HistoryRun() string {
+	return Catalog.Format(msgs.locale, "historyRun", nil)
+}
+
+// HistoryInsert says "Insert into terminal"
+// in the language the app shows.
+func HistoryInsert() string { return In(i18n.Locale()).HistoryInsert() }
+
+// HistoryInsert says "Insert into terminal"
+// in the language of msgs.
+func (msgs Messages) HistoryInsert() string {
+	return Catalog.Format(msgs.locale, "historyInsert", nil)
+}
+
+// HistoryAddSnippet says "Add to snippets"
+// in the language the app shows.
+func HistoryAddSnippet() string { return In(i18n.Locale()).HistoryAddSnippet() }
+
+// HistoryAddSnippet says "Add to snippets"
+// in the language of msgs.
+func (msgs Messages) HistoryAddSnippet() string {
+	return Catalog.Format(msgs.locale, "historyAddSnippet", nil)
+}
+
+// HistoryShowWhole says "Show the whole command"
+// in the language the app shows.
+func HistoryShowWhole() string { return In(i18n.Locale()).HistoryShowWhole() }
+
+// HistoryShowWhole says "Show the whole command"
+// in the language of msgs.
+func (msgs Messages) HistoryShowWhole() string {
+	return Catalog.Format(msgs.locale, "historyShowWhole", nil)
+}
+
+// HistoryBashTip says "Bash writes its history only when a shell exits, without times. To see commands at once, with the time they ran, add …"
+// in the language the app shows.
+func HistoryBashTip() string { return In(i18n.Locale()).HistoryBashTip() }
+
+// HistoryBashTip says "Bash writes its history only when a shell exits, without times. To see commands at once, with the time they ran, add …"
+// in the language of msgs.
+func (msgs Messages) HistoryBashTip() string {
+	return Catalog.Format(msgs.locale, "historyBashTip", nil)
+}
+
+// HistoryTipCopy says "Copy these lines"
+// in the language the app shows.
+func HistoryTipCopy() string { return In(i18n.Locale()).HistoryTipCopy() }
+
+// HistoryTipCopy says "Copy these lines"
+// in the language of msgs.
+func (msgs Messages) HistoryTipCopy() string {
+	return Catalog.Format(msgs.locale, "historyTipCopy", nil)
+}
+
+// HistoryBashTipTitle says "Bash history is incomplete"
+// in the language the app shows.
+func HistoryBashTipTitle() string { return In(i18n.Locale()).HistoryBashTipTitle() }
+
+// HistoryBashTipTitle says "Bash history is incomplete"
+// in the language of msgs.
+func (msgs Messages) HistoryBashTipTitle() string {
+	return Catalog.Format(msgs.locale, "historyBashTipTitle", nil)
 }

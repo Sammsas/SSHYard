@@ -308,6 +308,14 @@ func (a *App) termSuggestions(cn *conn, tv *termView, rawInput string) []termSug
 	if key := a.hostHistoryKey(cn); key != "" && a.hostHistory != nil {
 		history = append(history, a.hostHistory[key]...)
 	}
+	if a.hist != nil && cn != nil && a.hist.host == cn.host.ID {
+		for _, e := range a.hist.hist.Entries {
+			cmd := strings.TrimSpace(e.Cmd)
+			if cmd != "" && !strings.Contains(cmd, "\n") && !slices.Contains(history, cmd) {
+				history = append(history, cmd)
+			}
+		}
+	}
 	if tv != nil && tv.target != nil {
 		for _, h := range extractTerminalHistory(tv.target.Terminal()) {
 			if !slices.Contains(history, h) {
