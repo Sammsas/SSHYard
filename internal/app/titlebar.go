@@ -42,7 +42,7 @@ func (a *App) titleBar(c *ui.Context, m locales.Messages, tok theme.Tokens, clea
 		// Level with the sidebar, and its separator, below, so that the
 		// tabs start where the content does.
 		lead := ui.Row(c.Key("tblead"))
-		if a.page == pageSettings {
+		if !a.sidebarHidden() {
 			lead.Width(max(a.sbWidth+1, bar.Left))
 		}
 		lead.Shrink(0).FillHeight().
