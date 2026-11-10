@@ -1,7 +1,6 @@
 package app
 
 import (
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -172,6 +171,32 @@ func effortName(m locales.Messages, e string) string {
 	return m.AiEffortAuto()
 }
 
+// effortMeters are the signal bars lit for each thinking level, by the
+// names the providers and the ACP agents give it.
+var effortMeters = map[string]int{
+	llm.EffortNone: 0, "off": 0,
+	"minimal": 1, llm.EffortLow: 1,
+	llm.EffortMedium: 2,
+	llm.EffortHigh:   3,
+	llm.EffortXHigh:  4, "max": 4,
+}
+
+// meter shows thinking level e on ch as signal bars in place of the
+// bulb, in the accent while thinking is on, so the level reads even on a
+// bare chip. A level it does not know, as "" for the provider's default,
+// keeps the bulb.
+func (ch chip) meter(tok theme.Tokens, e string) chip {
+	n, ok := effortMeters[strings.ToLower(e)]
+	if !ok {
+		return ch
+	}
+	ch.Meter, ch.Level = true, n
+	if n > 0 {
+		ch.Tint = tok.Accent
+	}
+	return ch
+}
+
 // effortChip shows the pane's thinking level and chooses another. The
 // Anthropic format cannot turn thinking off, so it offers no "off".
 func (a *App) effortChip(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Messages, fit aiFit) {
@@ -180,7 +205,7 @@ func (a *App) effortChip(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Me
 	if p != nil {
 		cur = paneEffort(cn, p)
 	}
-	ch := chip{Icon: icons.Thinking, Label: effortName(m, cur), Tip: m.AiThinkingLevel()}.fit(m, fit, 0)
+	ch := chip{Icon: icons.Thinking, Label: effortName(m, cur), Tip: m.AiThinkingLevel()}.meter(tok, cur).fit(m, fit, 0)
 	a.menuChip(c, "aieffort:"+strconv.Itoa(cn.id), ch, func() []menuEntry {
 		out := make([]menuEntry, 0, len(effortLevels))
 		for _, e := range effortLevels {
@@ -478,7 +503,7 @@ func (a *App) aiTimeline(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Me
 			// The agent does not remember what comes before forgot.
 			forgot := func(i int) {
 				if cn.ai.forgot > 0 && i == cn.ai.forgot {
-					aiBanner(c.Key("aiforgot"), tok.Accent, icons.Info, m.AiAgentForgot())
+					aiBanner(c.Key("aiforgot"), tok.Accent, icons.Info, m.AiAgentForgot(), nil)
 				}
 			}
 			for i := range cn.ai.items {
@@ -486,8 +511,11 @@ func (a *App) aiTimeline(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Me
 				a.aiCard(c, cn, i, tok, m)
 			}
 			forgot(len(cn.ai.items))
-			n := len(cn.ai.items)
-			if cn.ai.running && (n == 0 || cn.ai.items[n-1].kind != "text") {
+			working, wait := aiWorking(cn.ai, c.Now())
+			if wait > 0 {
+				c.After(wait)
+			}
+			if working {
 				ui.Row(c.Key("aiworking")).Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
 					ui.Spinner(c).Label(m.AiWorking())
 					ui.Text(c, m.AiWorking()).FontSize(theme.Footnote).TextColor(tok.TextMuted)
@@ -511,6 +539,31 @@ func (a *App) aiTimeline(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Me
 	})
 }
 
+// aiQuiet is how long the reply's text may stop growing before the
+// timeline says the agent is at work again: a tool call being written, or
+// reviewed, streams nothing.
+const aiQuiet = 800 * time.Millisecond
+
+// aiWorking reports whether the running turn shows that it is at work:
+// always, unless its text is streaming. Otherwise wait is when to look
+// again, for the text to go quiet.
+func aiWorking(s *aiState, now time.Time) (working bool, wait time.Duration) {
+	if !s.running {
+		return false, 0
+	}
+	n := len(s.items)
+	if n == 0 || s.items[n-1].kind != "text" {
+		return true, 0
+	}
+	if l := len(s.items[n-1].text); n != s.textN || l != s.textLen {
+		s.textN, s.textLen, s.textAt = n, l, now
+	}
+	if wait = s.textAt.Add(aiQuiet).Sub(now); wait > 0 {
+		return false, wait
+	}
+	return true, 0
+}
+
 // aiComposer is the question being written, on two to eight lines of its
 // own that grow with it, then scroll. Under it, in the same box: the
 // permission and the attachment button, and on the right, for the built-in
@@ -519,8 +572,11 @@ func (a *App) aiTimeline(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Me
 // access shows a banner above it. The choices show as fit allows.
 func (a *App) aiComposer(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Messages, fit aiFit) {
 	ui.Column(c.Key("aifoot")).Shrink(0).FillWidth().Padding(0, theme.Space(3), theme.Space(3), theme.Space(3)).Gap(theme.Space(2)).Children(func() {
-		if a.modeOf(cn) == policy.ModeFull {
-			aiBanner(c.Key("fullbar"), tok.Danger, icons.Warning, m.AiFullBar())
+		switch {
+		case a.modeOf(cn) != policy.ModeFull:
+			cn.ai.fullSeen = false
+		case !cn.ai.fullSeen:
+			aiBanner(c.Key("fullbar"), tok.Danger, icons.Warning, m.AiFullBar(), func() { cn.ai.fullSeen = true })
 		}
 		a.aiApproval(c, cn, tok, m)
 		box := ui.Column(c.Key("aicompose")).FillWidth().Padding(theme.Space(1)).Gap(theme.Space(1)).
@@ -536,7 +592,7 @@ func (a *App) aiComposer(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Me
 		if paths := box.DroppedFiles(); len(paths) > 0 {
 			a.attachPaths(cn, paths)
 		}
-		id := cn.id
+		id, svc := cn.id, c.Services()
 		box.Border(1, edge).Children(func() {
 			if drag {
 				ui.Text(c.Key("aidrop"), m.AiDropFiles()).FontSize(theme.Footnote).TextColor(tok.Accent).Padding(theme.Space(1), theme.Space(2), 0, theme.Space(2))
@@ -551,6 +607,10 @@ func (a *App) aiComposer(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Me
 			in := ui.TextAreaBase(c.Key("aiin:"+strconv.Itoa(cn.id)+":"+strconv.Itoa(cn.ai.gen)), &cn.ai.input).
 				Placeholder(m.AiPlaceholder()).Label(m.AiPlaceholder()).FontSize(theme.Body).Padding(theme.Space(1), theme.Space(2)).
 				FillWidth().Lines(2, 8).
+				OnPaste(func(text string) bool {
+					cn := a.conns[id]
+					return cn != nil && cn.ai != nil && a.pasteAttach(cn, svc, text)
+				}).
 				OnTextKey(func(k ui.TextKey) bool {
 					if k.Key != ui.KeyEnter || k.Mods != 0 {
 						return false
@@ -600,16 +660,29 @@ func (a *App) sendAI(cn *conn) {
 	if cn.ai.running || (strings.TrimSpace(cn.ai.input) == "" && len(cn.ai.attach) == 0) {
 		return
 	}
-	cn.ai.scroll.Y = math.MaxFloat32
+	// Not math.MaxFloat32: an offset that large swallows the end's place
+	// when the end is revealed in the same layout, and lands at the top.
+	cn.ai.scroll.Y = 1e9
 	a.SendAI(cn.id, cn.ai.input)
 }
 
 // aiBanner is a rounded notice tinted with col, as the panes' banners are.
-func aiBanner(c *ui.Context, col ui.Color, ic *icons.Icon, text string) ui.Element {
-	return ui.Row(c).FillWidth().Padding(6, 10).Gap(theme.Space(2)).AlignItems(ui.Center).
+// With dismiss, a close button at its end calls it.
+func aiBanner(c *ui.Context, col ui.Color, ic *icons.Icon, text string, dismiss func()) ui.Element {
+	pad := float32(10)
+	if dismiss != nil {
+		pad = 4
+	}
+	return ui.Row(c).FillWidth().Padding(6, pad, 6, 10).Gap(theme.Space(2)).AlignItems(ui.Center).
 		Radius(theme.RadiusControl).Background(col.Alpha(0.12)).Border(1, col.Alpha(0.22)).Children(func() {
 		ui.Icon(c, ic.SVG).Size(14, 14).Shrink(0).TextColor(col)
 		ui.Text(c, text).FontSize(theme.Footnote).Grow(1).Shrink(1)
+		if dismiss != nil {
+			m := locales.In(c.Locale())
+			if (IconButton{Icon: icons.Close, Label: m.AiDismiss(), Size: Tiny}).Clicked(c, "dismiss") {
+				dismiss()
+			}
+		}
 	})
 }
 
@@ -684,22 +757,35 @@ func (a *App) aiCard(c *ui.Context, cn *conn, i int, tok theme.Tokens, m locales
 	case "text":
 		ui.Column(key).FillWidth().Children(func() {
 			if cn.ai.running && i == len(cn.ai.items)-1 {
-				markdown.Stream(c, it.text, cn.ai.md).FillWidth()
+				markdown.Stream(c, boldAsMeant(it.text), cn.ai.md).FillWidth()
 			} else {
-				markdown.View(c, it.text, cn.ai.md).FillWidth()
+				markdown.View(c, boldAsMeant(it.text), cn.ai.md).FillWidth()
 			}
 		})
 	case "think":
+		// Some models send thinking that is only blank lines: nothing to show.
+		text := strings.TrimSpace(it.text)
+		if text == "" {
+			return
+		}
 		ui.Column(key).FillWidth().Children(func() {
 			ui.Collapsible(c.Key("think"), m.AiThinking(), &it.open, func() {
 				ui.Row(c).Gap(theme.Space(2)).FillWidth().Children(func() {
 					ui.Box(c).Width(2).Shrink(0).AlignSelf(ui.Stretch).Radius(1).Background(tok.Line)
-					ui.Text(c, it.text).FontSize(theme.Footnote).TextColor(tok.TextMuted).Grow(1).Shrink(1)
+					ui.Text(c, text).FontSize(theme.Footnote).TextColor(tok.TextMuted).Grow(1).Shrink(1)
 				})
 			})
 		})
 	case "err":
-		aiBanner(key, tok.Danger, icons.Warning, aiErrLine(m, it.text))
+		aiBanner(key, tok.Danger, icons.Warning, aiErrLine(m, it.text), func() {
+			// After the frame, which is still going through the items.
+			id, text := cn.id, it.text
+			a.post(func() {
+				if cn := a.conns[id]; cn != nil && cn.ai != nil && i < len(cn.ai.items) && cn.ai.items[i].text == text {
+					a.dropAIItem(cn, i)
+				}
+			})
+		})
 	case "tool":
 		a.toolCard(key, cn, it, tok, m)
 	}
