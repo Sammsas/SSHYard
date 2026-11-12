@@ -32,7 +32,7 @@ def package(build_dir, version, arch):
                 info.external_attr = ((stat.S_IFDIR | (st.st_mode & 0o777) or 0o755) << 16) | 0x10
                 archive.writestr(info, b"")
                 continue
-            mode = st.st_mode & 0o777
+            mode = st.st_mode & 0o755
             if path.parent == macos_dir:
                 mode |= 0o755
             info = zipfile.ZipInfo.from_file(path, arcname)
