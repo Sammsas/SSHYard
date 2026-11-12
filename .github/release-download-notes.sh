@@ -25,6 +25,8 @@ link() {
   printf '[%s](%s/%s)' "$1" "$base" "${matches[0]}"
 }
 
+mac_arm_dmg="$(link DMG 'sshyard-*-arm64.dmg')"
+mac_x64_dmg="$(link DMG 'sshyard-*-amd64.dmg')"
 win_x64_setup="$(link Installer 'sshyard-setup-*-amd64.exe')"
 win_x64_portable="$(link 'Portable ZIP' 'sshyard-*-windows-amd64-portable.zip')"
 checksums="$(link SHA256SUMS 'SHA256SUMS')"
@@ -34,6 +36,15 @@ cat <<EOF
 ---
 
 ## Downloads
+
+### macOS
+
+macOS 12 or later.
+
+| Architecture | Download |
+| --- | --- |
+| Apple Silicon | $mac_arm_dmg |
+| Intel | $mac_x64_dmg |
 
 ### Windows
 

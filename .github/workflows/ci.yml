@@ -19,9 +19,16 @@ concurrency:
 
 jobs:
   build:
-    name: build windows/amd64
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
     if: "!startsWith(github.event.head_commit.message, 'chore(release): bump version to ')"
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+          - { os: macos-latest, goos: darwin, goarch: arm64 }
+          - { os: macos-latest, goos: darwin, goarch: amd64 }
     defaults:
       run:
         shell: bash
@@ -31,30 +38,34 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Cache NSIS
+        if: runner.os == 'Windows'
         uses: actions/cache@v6
         with:
           path: ~\AppData\Local\mygo\nsis-*
           key: nsis-${{ hashFiles('go.sum') }}
       - name: Check and test
+        if: matrix.goos == 'windows'
         run: |
           out="$(gofmt -l .)"
           if [ -n "$out" ]; then echo "::error::gofmt needed on:"; echo "$out"; exit 1; fi
           go vet ./...
           go test -count=1 ./...
-      - name: Build Windows client
-        run: go tool mygo build -platform windows/amd64
+      - name: Build client
+        run: go tool mygo build -platform "${{ matrix.goos }}/${{ matrix.goarch }}"
       - name: Package Windows portable ZIP
+        if: runner.os == 'Windows'
         run: |
           python .github/windows-portable-test.py
-          python .github/windows-portable.py build/windows-amd64 amd64
+          python .github/windows-portable.py "build/${{ matrix.goos }}-${{ matrix.goarch }}" "${{ matrix.goarch }}"
       - name: List outputs
-        run: ls -la build/windows-amd64
+        run: ls -la "build/${{ matrix.goos }}-${{ matrix.goarch }}"
       - uses: actions/upload-artifact@v7
         with:
-          name: sshyard-windows-amd64
+          name: sshyard-${{ matrix.goos }}-${{ matrix.goarch }}
           retention-days: 7
           if-no-files-found: error
           path: |
-            build/windows-amd64/*-setup-*.exe
-            build/windows-amd64/*-portable.zip
-            build/windows-amd64/update-*.json
+            build/${{ matrix.goos }}-${{ matrix.goarch }}/*.dmg
+            build/${{ matrix.goos }}-${{ matrix.goarch }}/*-setup-*.exe
+            build/${{ matrix.goos }}-${{ matrix.goarch }}/*-portable.zip
+            build/${{ matrix.goos }}-${{ matrix.goarch }}/update-*.json

@@ -92,6 +92,8 @@ class WindowsPortableTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             dist = Path(work)
             for name in (
+                "sshyard-0.0.4-arm64.dmg",
+                "sshyard-0.0.4-amd64.dmg",
                 "sshyard-setup-0.0.4-amd64.exe",
                 "SHA256SUMS",
             ):

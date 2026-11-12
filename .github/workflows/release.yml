@@ -47,7 +47,7 @@ jobs:
           mkdir -p release-notes
           printf '%s\n' "$RELEASE_NOTES" > release-notes/release-notes.md
           if ! grep -q '[^[:space:]]' release-notes/release-notes.md; then
-            printf 'Builds for Windows.\n' > release-notes/release-notes.md
+            printf 'Builds for Windows and macOS.\n' > release-notes/release-notes.md
           fi
           { printf '## %s\n\n' "$version"; cat release-notes/release-notes.md; } > release-notes/CHANGELOG.md
           cat release-notes/release-notes.md
@@ -59,8 +59,15 @@ jobs:
 
   build:
     needs: release-notes
-    name: build windows/amd64
-    runs-on: windows-latest
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+          - { os: macos-latest, goos: darwin, goarch: arm64 }
+          - { os: macos-latest, goos: darwin, goarch: amd64 }
     defaults:
       run:
         shell: bash
@@ -70,6 +77,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Cache NSIS
+        if: runner.os == 'Windows'
         uses: actions/cache@v6
         with:
           path: ~\AppData\Local\mygo\nsis-*
@@ -82,22 +90,23 @@ jobs:
         run: |
           jq '.updates.changelog = "release-notes/CHANGELOG.md"' mygo.json > mygo.json.notes
           mv mygo.json.notes mygo.json
-      - name: Build Windows client
-        run: go tool mygo build -platform windows/amd64
+      - name: Build client
+        run: go tool mygo build -platform "${{ matrix.goos }}/${{ matrix.goarch }}"
       - name: Package Windows portable ZIP
-        run: python .github/windows-portable.py build/windows-amd64 amd64
+        if: runner.os == 'Windows'
+        run: python .github/windows-portable.py "build/${{ matrix.goos }}-${{ matrix.goarch }}" "${{ matrix.goarch }}"
       - name: Collect release assets
         run: |
           shopt -s nullglob
-          dir="build/windows-amd64"
+          dir="build/${{ matrix.goos }}-${{ matrix.goarch }}"
           mkdir -p dist
-          files=("$dir"/*-setup-*.exe "$dir"/*-portable.zip "$dir"/*.delta "$dir"/update-*.json)
+          files=("$dir"/*.dmg "$dir"/*-setup-*.exe "$dir"/*-portable.zip "$dir"/*.delta "$dir"/update-*.json)
           [ "${#files[@]}" -gt 0 ] || { echo "::error::No release assets found"; exit 1; }
           cp "${files[@]}" dist/
           ls -la dist
       - uses: actions/upload-artifact@v7
         with:
-          name: assets-windows-amd64
+          name: assets-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
 
@@ -110,8 +119,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: assets-windows-amd64
+          pattern: assets-*
           path: dist
+          merge-multiple: true
       - uses: actions/download-artifact@v8
         with:
           name: release-notes
