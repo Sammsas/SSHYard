@@ -43,13 +43,17 @@ jobs:
         with:
           path: ~\AppData\Local\mygo\nsis-*
           key: nsis-${{ hashFiles('go.sum') }}
-      - name: Check and test
-        if: matrix.goos == 'windows'
+      # gofmt on a Windows checkout sees CRLF (core.autocrlf) on every
+      # file, so formatting and vet run on the macOS job (LF checkout).
+      - name: gofmt and vet
+        if: matrix.goos == 'darwin' && matrix.goarch == 'arm64'
         run: |
           out="$(gofmt -l .)"
           if [ -n "$out" ]; then echo "::error::gofmt needed on:"; echo "$out"; exit 1; fi
           go vet ./...
-          go test -count=1 ./...
+      - name: Test
+        if: matrix.goos == 'windows'
+        run: go test -count=1 ./...
       - name: Build client
         run: go tool mygo build -platform "${{ matrix.goos }}/${{ matrix.goarch }}"
       - name: Package Windows portable ZIP
