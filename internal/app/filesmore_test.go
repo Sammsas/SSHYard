@@ -48,6 +48,8 @@ func chosenNames(sd *sideList) []string {
 // keys and a drag over them; the delete key deletes all those chosen.
 func TestFilesMultiSelect(t *testing.T) {
 	a, tt, fc, dir := localPane(t, "a.txt", "b.txt", "c.txt", "d.txt")
+	a.setSidebarHidden(true)
+	tt.Frame()
 	l := &fc.fs.local
 	click := func(mods ui.Modifiers, name string) {
 		t.Helper()
@@ -124,7 +126,9 @@ func TestFilesMultiSelect(t *testing.T) {
 // The menu is drawn by the app: a click on its entry chooses it. Get Info
 // has a file's size, and counts a folder's.
 func TestFilesMenuClickAndInfo(t *testing.T) {
-	_, tt, fc, _ := localPane(t, "a.txt", "d/one.txt", "d/sub/two.txt")
+	a, tt, fc, _ := localPane(t, "a.txt", "d/one.txt", "d/sub/two.txt")
+	a.setSidebarHidden(true)
+	tt.Frame()
 	if err := tt.RightClick("a.txt"); err != nil {
 		t.Fatal(err)
 	}

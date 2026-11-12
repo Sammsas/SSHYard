@@ -12,6 +12,7 @@ func TestAIToolCardCollapsed(t *testing.T) {
 	for _, mode := range []theme.Mode{theme.Light, theme.Dark} {
 		t.Run(string(mode), func(t *testing.T) {
 			a, tt := newTestApp(t)
+			a.setSidebarHidden(true)
 			a.settings.Theme = mode
 			h := savedHost(t, a, "web", "10.0.0.8")
 			id, err := a.OpenAI(h.ID, openAt{}, 0)

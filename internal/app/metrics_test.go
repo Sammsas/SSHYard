@@ -217,6 +217,7 @@ func TestMetricsBarMenu(t *testing.T) {
 	h := addHost(t, a, srv, "box", "secret")
 	a.known.Add(srv.Addr, srv.HostKey.PublicKey())
 	a.Connect(h.ID, openAt{})
+	a.setSidebarHidden(true)
 	waitFor(t, tt, "connected", func() bool { return a.focused().s.Status().State == session.Connected })
 	waitSample(t, tt)
 
@@ -257,6 +258,7 @@ func TestMetricsHideSaveError(t *testing.T) {
 	h := addHost(t, a, srv, "box", "secret")
 	a.known.Add(srv.Addr, srv.HostKey.PublicKey())
 	a.Connect(h.ID, openAt{})
+	a.setSidebarHidden(true)
 	waitFor(t, tt, "connected", func() bool { return a.focused().s.Status().State == session.Connected })
 	waitSample(t, tt)
 

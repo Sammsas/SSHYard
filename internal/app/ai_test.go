@@ -551,6 +551,7 @@ func TestCorruptLayoutIgnored(t *testing.T) {
 
 func TestFullAccessNeedsConfirmation(t *testing.T) {
 	a, tt := newTestApp(t)
+	a.setSidebarHidden(true)
 	h := savedHost(t, a, "web", "10.0.0.8")
 	tt.SetSize(1100, 1800)
 

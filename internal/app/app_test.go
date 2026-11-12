@@ -789,6 +789,7 @@ func TestDragPaneToEdge(t *testing.T) {
 	a.SplitFocused(layout.Right)
 	a.SplitFocused(layout.Right)
 	last := a.focused().id
+	a.setSidebarHidden(true)
 	tt.Frame()
 	tt.Frame()
 	src, dst := a.paneBounds[last], a.paneBounds[first]
@@ -840,12 +841,15 @@ func TestDragPaneToEdge(t *testing.T) {
 
 	// A host from the sidebar onto the right of a pane, with the same
 	// preview: a new terminal there, on the shared connection.
-	hb := mustFind(t, tt, "box")
+	a.setSidebarHidden(false)
+	tt.Frame()
+	hosts := mustFind(t, tt, "Hosts")
+	hx, hy := hosts.X+40, hosts.Y+hosts.H+18
 	dst = a.paneBounds[last]
-	tt.Press(hb.X+hb.W/2, hb.Y+hb.H/2)
+	tt.Press(hx, hy)
 	for i := 1; i <= 8; i++ {
 		f := float32(i) / 8
-		tt.Move(hb.X+(dst.X+dst.W*0.95-hb.X)*f, hb.Y+(dst.Y+dst.H*0.5-hb.Y)*f)
+		tt.Move(hx+(dst.X+dst.W*0.95-hx)*f, hy+(dst.Y+dst.H*0.5-hy)*f)
 		tt.Frame()
 	}
 	if a.dropPreview == nil || a.dropPreview.edge != layout.Right || a.dropPreview.pane != a.paneNode(last) {

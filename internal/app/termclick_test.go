@@ -31,6 +31,7 @@ func TestTerminalRightClick(t *testing.T) {
 	srv, sh := startScript(t, "hello world")
 	a, tt := newTestApp(t)
 	c := connected(t, a, tt, srv)
+	a.setSidebarHidden(true)
 	shownText(t, tt, c, "hello world")
 	x, y := cellPoint(t, tt, c, 1, 0)
 
@@ -86,6 +87,7 @@ func TestCopyOnSelect(t *testing.T) {
 	srv, _ := startScript(t, "hello world")
 	a, tt := newTestApp(t)
 	c := connected(t, a, tt, srv)
+	a.setSidebarHidden(true)
 	shownText(t, tt, c, "hello world")
 	x, y := cellPoint(t, tt, c, 7, 0)
 	r, _ := tt.Find("Terminal box")
@@ -133,6 +135,7 @@ func TestOpenLink(t *testing.T) {
 	srv, _ := startScript(t, "docs https://example.com/x?a=1. end")
 	a, tt := newTestApp(t)
 	c := connected(t, a, tt, srv)
+	a.setSidebarHidden(true)
 	shownText(t, tt, c, "end")
 	x, y := cellPoint(t, tt, c, 12, 0)
 	tt.ClickAt(x, y)

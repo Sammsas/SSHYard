@@ -282,6 +282,7 @@ func TestAIPaneNarrow(t *testing.T) {
 	if _, err := a.OpenAI(h.ID, openAt{}, 0); err != nil {
 		t.Fatal(err)
 	}
+	a.setSidebarHidden(true)
 	tt.Frame()
 	tt.Frame()
 	for _, s := range []string{"Review", "lab-model", "Built-in", "Split Right"} {
@@ -289,7 +290,7 @@ func TestAIPaneNarrow(t *testing.T) {
 			t.Errorf("wide pane misses %q: %q", s, tt.Texts())
 		}
 	}
-	tt.SetSize(540, 600) // a pane under aiHeadWidth
+	tt.SetSize(320, 600) // a pane under aiShortWidth/aiHeadWidth with floating sidebar hidden
 	tt.Frame()
 	tt.Frame()
 	if w := a.paneBounds[a.focused().id].W; w >= aiHeadWidth {

@@ -25,8 +25,8 @@ link() {
   printf '[%s](%s/%s)' "$1" "$base" "${matches[0]}"
 }
 
-mac_arm_dmg="$(link DMG 'sshyard-*-arm64.dmg')"
-mac_x64_dmg="$(link DMG 'sshyard-*-amd64.dmg')"
+mac_arm_zip="$(link 'ZIP (.app)' 'sshyard-*-darwin-arm64.zip')"
+mac_x64_zip="$(link 'ZIP (.app)' 'sshyard-*-darwin-amd64.zip')"
 win_x64_setup="$(link Installer 'sshyard-setup-*-amd64.exe')"
 win_x64_portable="$(link 'Portable ZIP' 'sshyard-*-windows-amd64-portable.zip')"
 checksums="$(link SHA256SUMS 'SHA256SUMS')"
@@ -39,12 +39,14 @@ cat <<EOF
 
 ### macOS
 
-macOS 12 or later.
+macOS 12 or later. Extract the ZIP and drag \`SSHYard.app\` to \`Applications\`.
 
 | Architecture | Download |
 | --- | --- |
-| Apple Silicon | $mac_arm_dmg |
-| Intel | $mac_x64_dmg |
+| Apple Silicon | $mac_arm_zip |
+| Intel | $mac_x64_zip |
+
+Cross-compiled without Apple notarization; if Gatekeeper blocks opening, run \`xattr -cr /Applications/SSHYard.app\` (or allow it in Privacy & Security).
 
 ### Windows
 

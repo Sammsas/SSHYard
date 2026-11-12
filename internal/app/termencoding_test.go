@@ -130,6 +130,7 @@ func TestOutputEncodingPaneScope(t *testing.T) {
 	a.Connect(first.host.ID, openAt{pane: first.id, edge: layout.Right})
 	second := a.focused()
 	waitFor(t, tt, "second terminal", func() bool { return second.s.Status().State == session.Connected })
+	a.setSidebarHidden(true)
 	tt.Frame()
 	m := locales.In("en")
 	if first.s.Term.OutputEncoding() != vt.EncodingUTF8 || second.s.Term.OutputEncoding() != vt.EncodingUTF8 {

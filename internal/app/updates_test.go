@@ -84,6 +84,7 @@ func TestUpdateSettings(t *testing.T) {
 	tt.Frame()
 	mustClick(t, tt, "View Update")
 	a.closeSettings()
+	a.setSidebarHidden(true)
 	tt.Frame()
 	mustClick(t, tt, "Update")
 	if upd.checks != 3 {

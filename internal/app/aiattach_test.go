@@ -106,6 +106,7 @@ func TestAIPaneAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	cn := a.conns[id]
+	a.setSidebarHidden(true)
 	tt.Frame()
 	mustClick(t, tt, "Attach Files")
 	waitFor(t, tt, "attachments", func() bool {

@@ -437,6 +437,7 @@ func TestSnippetUITabsAndSearch(t *testing.T) {
 	a, tt := newTestApp(t)
 	m := locales.In("en")
 	a.ToggleTool(layout.Snippets)
+	a.setSidebarHidden(true)
 	tt.Frame()
 	a.snippets.form, a.snippets.showing = nil, false
 	if _, err := a.saveSnippet(assets.Snippet{Name: "plain"}, "echo plain"); err != nil {

@@ -92,8 +92,8 @@ class WindowsPortableTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             dist = Path(work)
             for name in (
-                "sshyard-0.0.4-arm64.dmg",
-                "sshyard-0.0.4-amd64.dmg",
+                "sshyard-0.0.4-darwin-arm64.zip",
+                "sshyard-0.0.4-darwin-amd64.zip",
                 "sshyard-setup-0.0.4-amd64.exe",
                 "SHA256SUMS",
             ):
@@ -111,6 +111,10 @@ class WindowsPortableTest(unittest.TestCase):
                 result.stdout,
             )
             self.assertIn(
+                "| Apple Silicon | [ZIP (.app)](https://github.com/Licoy/sshyard/releases/download/v0.0.4/sshyard-0.0.4-darwin-arm64.zip) |",
+                result.stdout,
+            )
+            self.assertIn(
                 "| x64 | [Installer](https://github.com/Licoy/sshyard/releases/download/v0.0.4/sshyard-setup-0.0.4-amd64.exe)"
                 f" · [Portable ZIP](https://github.com/Licoy/sshyard/releases/download/v0.0.4/{name}) |",
                 result.stdout,
@@ -119,6 +123,30 @@ class WindowsPortableTest(unittest.TestCase):
             result = subprocess.run(command, capture_output=True, encoding="utf-8")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("found 2", result.stderr)
+
+    def test_macos_archive_preserves_bundle_and_exec_bit(self):
+        macos_spec = importlib.util.spec_from_file_location("macos_archive", HERE / "macos-archive.py")
+        macos_archive = importlib.util.module_from_spec(macos_spec)
+        macos_spec.loader.exec_module(macos_archive)
+        with tempfile.TemporaryDirectory() as work:
+            stage = Path(work)
+            with self.assertRaises(FileNotFoundError):
+                macos_archive.package(stage, "0.0.4", "arm64")
+            bin_path = stage / "SSHYard.app" / "Contents" / "MacOS" / "SSHYard"
+            plist_path = stage / "SSHYard.app" / "Contents" / "Info.plist"
+            bin_path.parent.mkdir(parents=True)
+            bin_path.write_bytes(b"mach-o")
+            bin_path.chmod(0o644)
+            plist_path.write_bytes(b"<plist/>")
+            output = macos_archive.package(stage, "0.0.4", "arm64")
+            self.assertEqual(output.name, "sshyard-0.0.4-darwin-arm64.zip")
+            with zipfile.ZipFile(output) as archive:
+                self.assertIsNone(archive.testzip())
+                names = set(archive.namelist())
+                self.assertIn("SSHYard.app/Contents/MacOS/SSHYard", names)
+                self.assertIn("SSHYard.app/Contents/Info.plist", names)
+                info = archive.getinfo("SSHYard.app/Contents/MacOS/SSHYard")
+                self.assertEqual((info.external_attr >> 16) & 0o777, 0o755)
 
 
 if __name__ == "__main__":
