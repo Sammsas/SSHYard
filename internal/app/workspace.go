@@ -596,8 +596,7 @@ func dropPreview(p *ui.Painter, r ui.Rect, edge layout.Edge, tok theme.Tokens) {
 
 func (a *App) termElement(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, pal *theme.Terminal, m locales.Messages) {
 	tv := cn.tv
-	tv.acProvider = func(input string) []termSuggestion { return a.termSuggestions(cn, tv, input) }
-	tv.acSubmit = func(cmd string) { a.recordHostHistory(cn, cmd) }
+	tv.acProvider = a.termSuggestions
 	ui.Box(c.Key("termwrap")).Grow(1).FillWidth().Children(func() {
 		term := ui.Box(c.Key("term")).Fill().Focusable().FocusRing(false).Clip().
 			Cursor(ui.CursorText).Label(m.Terminal() + " " + cn.host.Label())
@@ -675,7 +674,7 @@ func (a *App) termElement(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn
 		tv.clear = a.clearContent
 		tv.hl, tv.hlOverride, tv.hlFullScreen = a.highlighter(), a.settings.Highlight.Override, a.settings.Highlight.FullScreen
 		term.Draw(func(p *ui.Painter, r ui.Rect) { tv.paint(p, r, pal, has) })
-		a.termAutocompleteView(c, cn, tv, tb, has, currentTokens(c))
+		a.termAutocompleteView(c, cn, tv, tb, t.Focus == n.ID && a.page == pageWorkspace, currentTokens(c))
 	})
 }
 

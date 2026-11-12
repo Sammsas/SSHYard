@@ -342,7 +342,6 @@ type App struct {
 	docker      *dockerState
 	tmux        *tmuxState
 	hist        *historyState
-	hostHistory map[string][]string
 	selected    string // host chosen in the sidebar
 	search      string
 	searchFocus bool // the search, its field or button, takes the focus next frame
@@ -1069,8 +1068,7 @@ func (a *App) makeConn(hostID string, kind layout.Kind, link int) (*conn, error)
 		c.tv = newTermView(sessTarget{c.s}, float32(a.settings.TerminalFontSize))
 		c.tv.inputError = a.snippetSendResult
 		c.tv.family = a.termFamily()
-		c.tv.acProvider = func(input string) []termSuggestion { return a.termSuggestions(c, c.tv, input) }
-		c.tv.acSubmit = func(cmd string) { a.recordHostHistory(c, cmd) }
+		c.tv.acProvider = a.termSuggestions
 		a.spaceTerm(c.tv)
 		a.armOSC52(c)
 		if a.termSeq == nil {

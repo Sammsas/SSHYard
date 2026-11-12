@@ -1,7 +1,6 @@
 package app
 
 import (
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -15,7 +14,6 @@ type termSuggestKind uint8
 
 const (
 	suggestSnippet termSuggestKind = iota
-	suggestHistory
 	suggestLinux
 )
 
@@ -28,7 +26,6 @@ type termSuggestion struct {
 const (
 	acMaxSuggestions = 12
 	acMaxVisible     = 6
-	acMaxHostHistory = 300
 )
 
 // linuxCommandCatalog holds common Linux base commands and their subcommands.
@@ -198,69 +195,6 @@ var linuxCommandCatalog = []termSuggestion{
 	{Kind: suggestLinux, Cmd: "history | tail -n 50", Desc: "查看最近执行的命令历史"},
 }
 
-func (a *App) hostHistoryKey(cn *conn) string {
-	if cn == nil {
-		return ""
-	}
-	if cn.host.ID != "" {
-		return cn.host.ID
-	}
-	if t := cn.host.Target(); t != "" {
-		return t
-	}
-	return "local"
-}
-
-func (a *App) recordHostHistory(cn *conn, cmd string) {
-	cmd = strings.TrimSpace(cmd)
-	if cmd == "" || strings.ContainsAny(cmd, "\r\n") {
-		return
-	}
-	key := a.hostHistoryKey(cn)
-	if key == "" {
-		return
-	}
-	if a.hostHistory == nil {
-		a.hostHistory = map[string][]string{}
-	}
-	list := a.hostHistory[key]
-	list = slices.DeleteFunc(list, func(s string) bool { return s == cmd })
-	list = append([]string{cmd}, list...)
-	if len(list) > acMaxHostHistory {
-		list = list[:acMaxHostHistory]
-	}
-	a.hostHistory[key] = list
-}
-
-// extractTerminalHistory scans recent terminal lines for shell prompt commands.
-func extractTerminalHistory(t *vt.Terminal) []string {
-	if t == nil {
-		return nil
-	}
-	snap := t.Snapshot(0)
-	if snap.Modes.AltScreen {
-		return nil
-	}
-	var out []string
-	seen := map[string]bool{}
-	for i := len(snap.Lines) - 1; i >= 0; i-- {
-		if i == snap.CursorY {
-			continue
-		}
-		line := strings.TrimSpace(snap.Lines[i].String())
-		if line == "" {
-			continue
-		}
-		cmd := strings.TrimSpace(extractCursorPromptCommand(line))
-		if len(cmd) < 2 || seen[cmd] {
-			continue
-		}
-		seen[cmd] = true
-		out = append(out, cmd)
-	}
-	return out
-}
-
 // extractCursorPromptCommand extracts the command portion after a shell prompt
 // delimiter such as "$ ", "# ", "% ", "❯ ", "➜ ", or "> ".
 func extractCursorPromptCommand(line string) string {
@@ -278,7 +212,7 @@ func extractCursorPromptCommand(line string) string {
 	return line[best+bestLen:]
 }
 
-func (a *App) termSuggestions(cn *conn, tv *termView, rawInput string) []termSuggestion {
+func (a *App) termSuggestions(rawInput string) []termSuggestion {
 	q := strings.TrimLeft(rawInput, " \t")
 	if q == "" {
 		return nil
@@ -292,10 +226,7 @@ func (a *App) termSuggestions(cn *conn, tv *termView, rawInput string) []termSug
 			}
 			body = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n"))
 			if body == "" || strings.Contains(body, "\n") {
-				// For multiline snippets, only use the first line if single-command friendly, or skip newline bodies
-				if strings.Contains(body, "\n") {
-					continue
-				}
+				continue
 			}
 			snippets = append(snippets, termSuggestion{
 				Kind: suggestSnippet,
@@ -304,29 +235,10 @@ func (a *App) termSuggestions(cn *conn, tv *termView, rawInput string) []termSug
 			})
 		}
 	}
-	var history []string
-	if key := a.hostHistoryKey(cn); key != "" && a.hostHistory != nil {
-		history = append(history, a.hostHistory[key]...)
-	}
-	if a.hist != nil && cn != nil && a.hist.host == cn.host.ID {
-		for _, e := range a.hist.hist.Entries {
-			cmd := strings.TrimSpace(e.Cmd)
-			if cmd != "" && !strings.Contains(cmd, "\n") && !slices.Contains(history, cmd) {
-				history = append(history, cmd)
-			}
-		}
-	}
-	if tv != nil && tv.target != nil {
-		for _, h := range extractTerminalHistory(tv.target.Terminal()) {
-			if !slices.Contains(history, h) {
-				history = append(history, h)
-			}
-		}
-	}
-	return buildTermSuggestions(q, snippets, history)
+	return buildTermSuggestions(q, snippets)
 }
 
-func buildTermSuggestions(rawInput string, snippets []termSuggestion, history []string) []termSuggestion {
+func buildTermSuggestions(rawInput string, snippets []termSuggestion) []termSuggestion {
 	q := strings.TrimLeft(rawInput, " \t")
 	if q == "" {
 		return nil
@@ -383,18 +295,7 @@ func buildTermSuggestions(rawInput string, snippets []termSuggestion, history []
 		}
 	}
 
-	// 2. Host History (当前主机历史指令)
-	for _, cmd := range history {
-		cmdLower := strings.ToLower(cmd)
-		item := termSuggestion{Kind: suggestHistory, Cmd: cmd, Desc: "历史指令"}
-		if strings.HasPrefix(cmdLower, qLower) {
-			addCandidate(item, true)
-		} else if matchTokens(cmdLower) {
-			addCandidate(item, false)
-		}
-	}
-
-	// 3. Built-in Linux commands & subcommands (Linux基础命令及下接指令)
+	// 2. Built-in Linux commands & subcommands (Linux基础命令及下接指令)
 	sudoPrefix := ""
 	linuxQuery := qLower
 	if strings.HasPrefix(qLower, "sudo ") {
@@ -533,7 +434,7 @@ func (v *termView) updateAutocomplete(t *vt.Terminal) {
 	if v.acProvider != nil {
 		v.acItems = v.acProvider(v.inputBuf)
 	} else {
-		v.acItems = buildTermSuggestions(v.inputBuf, nil, nil)
+		v.acItems = buildTermSuggestions(v.inputBuf, nil)
 	}
 	v.acIndex = 0
 	v.acScroll = 0
@@ -584,10 +485,7 @@ func (v *termView) trackKey(key ui.Key, mods ui.Modifiers, t *vt.Terminal) {
 		return
 	}
 	switch {
-	case mods == 0 && key == ui.KeyEnter:
-		if cmd := strings.TrimSpace(v.inputBuf); cmd != "" && !v.isPasswordPrompt(t) && v.acSubmit != nil {
-			v.acSubmit(cmd)
-		}
+	case mods == 0 && (key == ui.KeyEnter || key == ui.KeyTab):
 		v.resetAutocomplete()
 	case mods == 0 && key == ui.KeyBackspace:
 		if v.inputBuf != "" {
@@ -622,15 +520,6 @@ func (v *termView) trackText(text string, t *vt.Terminal) {
 	if strings.ContainsAny(text, "\r\n") {
 		norm := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 		parts := strings.Split(norm, "\n")
-		for i := 0; i < len(parts)-1; i++ {
-			line := parts[i]
-			if i == 0 {
-				line = v.inputBuf + line
-			}
-			if cmd := strings.TrimSpace(line); cmd != "" && v.acSubmit != nil {
-				v.acSubmit(cmd)
-			}
-		}
 		v.inputBuf = parts[len(parts)-1]
 	} else {
 		if v.inputBuf == "" {
@@ -649,8 +538,6 @@ func suggestKindBadge(k termSuggestKind, tok theme.Tokens) (string, ui.Color) {
 	switch k {
 	case suggestSnippet:
 		return "快捷", tok.Accent
-	case suggestHistory:
-		return "历史", tok.Success
 	default:
 		return "命令", tok.TextMuted
 	}
@@ -695,11 +582,12 @@ func (a *App) termAutocompleteView(c *ui.Context, cn *conn, tv *termView, termBo
 
 	tv.clampAcScroll()
 	end := min(tv.acScroll+vis, nItems)
+	clickedIdx := -1
 	card.Children(func() {
 		for idx := tv.acScroll; idx < end; idx++ {
 			i := idx
 			item := tv.acItems[i]
-			sel := i == tv.acIndex
+			sel := tv.acTouched && i == tv.acIndex
 			badgeText, badgeCol := suggestKindBadge(item.Kind, tok)
 
 			row := ui.ButtonBase(c.Key("term:ac:item:"+strconv.Itoa(i))).
@@ -731,17 +619,20 @@ func (a *App) termAutocompleteView(c *ui.Context, cn *conn, tv *termView, termBo
 				}
 			})
 			if row.Clicked() {
-				tv.acIndex = i
-				tv.acceptAutocomplete(i)
-				a.focusReq = cn.id
+				clickedIdx = i
 			}
 		}
 		ui.Box(c).Height(1).Shrink(0).FillWidth().Background(tok.Line)
 		ui.Row(c.Key("term:ac:foot")).FillWidth().Height(footH).Padding(0, theme.Space(2.5)).
 			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "↑↓ 选择 · Tab 补全 · Esc 关闭").FontSize(10).TextColor(tok.TextMuted).SingleLine()
+			ui.Text(c, "↑↓ 切换 · Enter 补全 · Esc 关闭").FontSize(10).TextColor(tok.TextMuted).SingleLine()
 			ui.Spacer(c)
 			ui.Text(c, strconv.Itoa(tv.acIndex+1)+"/"+strconv.Itoa(nItems)).FontSize(10).TextColor(tok.TextMuted).SingleLine()
 		})
 	})
+	if clickedIdx >= 0 {
+		tv.acIndex = clickedIdx
+		tv.acceptAutocomplete(clickedIdx)
+		a.focusReq = cn.id
+	}
 }

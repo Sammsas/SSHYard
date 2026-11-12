@@ -166,7 +166,6 @@ type termView struct {
 	acTouched   bool
 	acDismissed bool
 	acProvider  func(input string) []termSuggestion
-	acSubmit    func(cmd string)
 }
 
 func newTermView(t ptyTarget, fontSize float32) *termView {
@@ -1014,17 +1013,22 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 		if v.acOpen() {
 			switch {
 			case (mods == 0 && ev.Key == ui.KeyDown) || (mods == ui.Ctrl && ev.Key == ui.KeyN):
-				v.acIndex = (v.acIndex + 1) % len(v.acItems)
-				v.acTouched = true
+				if !v.acTouched {
+					v.acIndex = 0
+					v.acTouched = true
+				} else {
+					v.acIndex = (v.acIndex + 1) % len(v.acItems)
+				}
 				v.clampAcScroll()
 				return true
 			case (mods == 0 && ev.Key == ui.KeyUp) || (mods == ui.Ctrl && ev.Key == ui.KeyP):
-				v.acIndex = (v.acIndex - 1 + len(v.acItems)) % len(v.acItems)
-				v.acTouched = true
+				if !v.acTouched {
+					v.acIndex = len(v.acItems) - 1
+					v.acTouched = true
+				} else {
+					v.acIndex = (v.acIndex - 1 + len(v.acItems)) % len(v.acItems)
+				}
 				v.clampAcScroll()
-				return true
-			case mods == 0 && ev.Key == ui.KeyTab:
-				v.acceptAutocomplete(v.acIndex)
 				return true
 			case mods == 0 && ev.Key == ui.KeyEnter && v.acTouched:
 				v.acceptAutocomplete(v.acIndex)
