@@ -145,6 +145,7 @@ type conn struct {
 	waitingSecrets bool
 	restorePending bool
 	restoredQuiet  bool
+	unattended     bool // no one watches it start: a login asking questions fails
 	id             int
 	kind           layout.Kind
 	host           assets.Host
@@ -305,9 +306,10 @@ type App struct {
 
 	// interface state
 	page page
-	// pref is the settings page showing
-	pref     prefPage
-	snippets snippetState
+	// pref is the settings page showing, prefSearch the settings' search
+	pref       prefPage
+	prefSearch prefSearchState
+	snippets   snippetState
 	// bc is the broadcast panel's state.
 	bc broadcastState
 	// tabStart is the first tab the title bar shows when not all fit, the
@@ -360,6 +362,12 @@ type App struct {
 	credHold    focusHold
 	proxyHold   focusHold
 	installHold focusHold
+	// challenges are the rounds of login questions (one-time passwords)
+	// waiting for the user, the first in the sheet; see challenge.go
+	challenges    []*challengeAsk
+	challenging   bool
+	challengeHold focusHold
+	challengeSeq  int
 	// credForm is the credential sheet's fields; credDelete the
 	// credential the delete dialog is for, and rebindChoice where its
 	// hosts go
@@ -379,6 +387,9 @@ type App struct {
 	mkdirHold    focusHold
 	compressHold focusHold
 	prompting    bool
+	sudo         *sudoAsk // the sheet asking a files pane's sudo password
+	sudoAsking   bool
+	sudoHold     focusHold
 	hostKey      *hostKeyAsk
 	keyChange    *hostKeyChange
 	changingKey  bool
@@ -403,6 +414,7 @@ type App struct {
 	concChoice, openMBChoice float64
 	osc52Choice              int
 	filesEdgeChoice          int // where a files pane opens, by index
+	toolPanesChoice          int // how the rail opens its tools, by index
 	rightClickChoice         int // what a terminal's right click does, by index
 	chromeMat, contentMat    int // the materials chosen, by materials' index
 	osc52KiB                 float64
@@ -446,6 +458,9 @@ type App struct {
 	hlHold    focusHold
 	// paneBounds are where the panes were last frame, by session
 	paneBounds map[int]ui.Rect
+	// barWidths are how wide the actions an actionBar keeps drew last
+	// frame, by bar and action
+	barWidths map[string]float32
 	// dropPreview is where a drag in progress would land, nil for none
 	dropPreview *dropTarget
 	// temps are the temporary hosts of quick connect, by ID, kept while a
@@ -553,6 +568,9 @@ type App struct {
 	// ID, which a tool pane gives the focus back to.
 	toolNames map[layout.Kind]string
 	toolFocus map[int]int
+	// railWidths are how wide, in DIPs, the panes the rail opens were
+	// last left beside another pane, by kind; see fitRailWidth.
+	railWidths map[layout.Kind]float32
 	// shells are this computer's shells, found as the app starts; see
 	// localID.
 	shells []session.Shell
@@ -573,10 +591,23 @@ type App struct {
 	backingUp  bool
 	backupHold focusHold
 	kdf        vault.Params
+	// cost is the sheet asking whether to derive a backup's or a PuTTY
+	// key's password whose derivation costs more than usual; costKeys
+	// the keys derived once agreed, by costlyID under costSalt
+	cost     *costAsk
+	costOpen bool
+	costHold focusHold
+	costKeys map[[32]byte]costlyKey
+	costSalt []byte
 	// defaultPw is the sheet setting the default backup password
 	defaultPw        *passwordForm
 	settingDefaultPw bool
 	defaultPwHold    focusHold
+	// masterPw is the local master password sheet: to unlock, set it up
+	// in place of an unusable system keychain, change it or leave it
+	masterPw     *masterPwForm
+	masterPwOpen bool
+	masterPwHold focusHold
 	// cloud is what this device knows of the places it backs up to, read
 	// once; cloudCtx ends their requests when the app closes. target is
 	// the backup location sheet open, remotes the sheet of a place's
@@ -1056,6 +1087,8 @@ func (a *App) makeConn(hostID string, kind layout.Kind, link int) (*conn, error)
 func (a *App) place(c *conn, at openAt) {
 	if at.pane == 0 || !a.ws.Place(c.item(), at.pane, at.edge) {
 		a.ws.Open(c.item())
+	} else if railPane(c.kind) && (at.edge == layout.Left || at.edge == layout.Right) {
+		a.fitRailWidth(c)
 	}
 	a.shown(c)
 }
@@ -1135,6 +1168,7 @@ func (a *App) hostConfig(h assets.Host, c *conn, creds func(context.Context) (se
 		HostKey:     a.known.Callback(),
 		Dial:        a.p.Dial,
 		Credentials: creds,
+		Ask:         a.challengeAsker(c),
 	}
 	path, err := a.store.JumpPath(h.ID)
 	if err != nil && !errors.Is(err, assets.ErrNotFound) {
@@ -1307,6 +1341,7 @@ func (a *App) credentials(c *conn, h assets.Host) (session.Credentials, error) {
 	default:
 		// The password typed for it, else the keys of this computer, and
 		// the password is asked when none of them logs in.
+		out.PasswordPrompt = true
 		out.Password = typed("ask/" + h.ID)
 		if out.Password == "" {
 			// A Telnet or serial host has no keys to offer.
@@ -1388,6 +1423,7 @@ func (a *App) finishCloseSession(c *conn) {
 	if a.clipAsk != nil && a.clipAsk.pane == id {
 		a.clipAsk = nil
 	}
+	a.keepRailWidth(c)
 	a.ws.Close(id)
 	delete(a.conns, id)
 	if c.kind == layout.Broadcast {

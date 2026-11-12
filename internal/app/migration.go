@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"github.com/Licoy/sshyard/internal/assets"
+	"github.com/Licoy/sshyard/internal/keys"
 	"github.com/Licoy/sshyard/internal/migration"
 	"github.com/Licoy/sshyard/locales"
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -44,6 +46,10 @@ type migrationForm struct {
 	baseline                     []assets.Host
 	search, group, err           string
 	saveSecrets, reading, saving bool
+	// costly is set once the user agreed to derive the batch's PuTTY keys
+	// whose passphrase derivation costs more than usual (off the UI
+	// thread, as the batch is saved)
+	costly bool
 	// composing shows the text area of a text import, text its content;
 	// batch edits the selected rows, table keeps the place of its rows,
 	// done is what the saved import did
@@ -52,13 +58,19 @@ type migrationForm struct {
 	batch     migrationBatch
 	table     ui.ListState
 	done      *migrationOutcome
+	// paths are the files read, encoding the legacy code page they were
+	// decoded in (empty when none was); choosing another reads them again
+	paths    []string
+	encoding migration.Encoding
 }
 
 // migrationOutcome counts what a text import did with its rows.
 type migrationOutcome struct{ added, updated, skipped int }
 
-// editable reports a text import, whose rows edit every field.
-func (f *migrationForm) editable() bool { return f.source == migration.Text }
+// editable reports a text or CSV import, whose rows edit every field.
+func (f *migrationForm) editable() bool {
+	return f.source == migration.Text || f.source == migration.CSV
+}
 
 func migrationTarget(address string, port int, user string) string {
 	address = strings.Trim(strings.TrimSpace(address), "[]")
@@ -71,7 +83,7 @@ func migrationTarget(address string, port int, user string) string {
 	return strings.ToLower(address) + "\x00" + strconv.Itoa(port) + "\x00" + user
 }
 func (a *App) newMigration(source migration.Source, result migration.Result) *migrationForm {
-	f := &migrationForm{source: source, issues: result.Issues, baseline: a.store.List()}
+	f := &migrationForm{source: source, issues: result.Issues, baseline: a.store.List(), encoding: result.Encoding}
 	// A text import's rows choose their login, which saves its secret.
 	f.saveSecrets = f.editable()
 	saved := f.saved()
@@ -245,14 +257,17 @@ func (a *App) readMigration(m locales.Messages, source migration.Source, directo
 			}
 		} else {
 			title := m.MigrationChooseFiles()
-			if source == migration.Text {
+			switch source {
+			case migration.Text:
 				title = m.MigrationTextChooseFile()
+			case migration.CSV:
+				title = m.MigrationCSVChooseFile()
 			}
 			paths, err = a.p.PickFiles(title)
 		}
 		var result migration.Result
 		if err == nil && len(paths) > 0 {
-			result, err = migration.Read(source, paths)
+			result, err = migration.Read(source, paths, migration.Options{Prefer: migration.LanguageEncoding(i18n.Locale())})
 		}
 		a.post(func() {
 			if a.migration != f {
@@ -269,13 +284,47 @@ func (a *App) readMigration(m locales.Messages, source migration.Source, directo
 				a.closeMigration()
 				return
 			}
-			next := a.newMigration(source, result)
-			if len(next.rows) == 0 {
-				next.err = m.MigrationEmpty()
-			}
-			a.migration = next
+			a.migration = a.readMigrationResult(m, source, paths, result)
 		})
 	}()
+}
+
+// rereadMigration reads the preview's files again in another legacy code
+// page; on failure the preview stays as it was, with the error.
+func (a *App) rereadMigration(m locales.Messages, encoding migration.Encoding) {
+	f := a.migration
+	if f == nil || f.reading || f.saving || f.done != nil || len(f.paths) == 0 || encoding == f.encoding {
+		return
+	}
+	source, paths := f.source, f.paths
+	f.reading, f.err = true, ""
+	go func() {
+		result, err := migration.Read(source, paths, migration.Options{Encoding: encoding})
+		a.post(func() {
+			if a.migration != f {
+				clearMigrationResult(result)
+				return
+			}
+			f.reading = false
+			if err != nil {
+				clearMigrationResult(result)
+				f.err = migrationReadError(m, err)
+				return
+			}
+			f.forget()
+			a.migration = a.readMigrationResult(m, source, paths, result)
+		})
+	}()
+}
+
+// readMigrationResult is the preview of what paths read to.
+func (a *App) readMigrationResult(m locales.Messages, source migration.Source, paths []string, result migration.Result) *migrationForm {
+	next := a.newMigration(source, result)
+	next.paths = paths
+	if len(next.rows) == 0 {
+		next.err = m.MigrationEmpty()
+	}
+	return next
 }
 func (a *App) startMigrationSave(m locales.Messages) {
 	f := a.migration
@@ -308,7 +357,19 @@ func (a *App) startMigrationSave(m locales.Messages) {
 			}
 			f.saving = false
 			var rowErr *migrationRowError
+			var ce *keys.CostError
 			switch {
+			case errors.As(err, &ce):
+				// Nothing was saved or derived: asked, the batch runs again
+				// with its costly keys allowed.
+				a.askCost(&costAsk{memory: ce.Memory, passes: ce.Passes, run: func() {
+					a.closeCost()
+					if a.migration == f {
+						f.costly = true
+						a.startMigrationSave(m)
+					}
+				}})
+				return
 			case errors.As(err, &rowErr) && f.editable():
 				rowErr.row.problem = rowErr.text
 				return
@@ -356,11 +417,14 @@ func clearMigrationResult(result migration.Result) {
 }
 
 func migrationReadError(m locales.Messages, err error) string {
+	var fe *migration.FormatError
 	switch {
 	case errors.Is(err, migration.ErrNoEntries):
 		return m.MigrationEmpty()
 	case errors.Is(err, migration.ErrTooLarge):
 		return m.MigrationTooLarge()
+	case errors.As(err, &fe) && fe.Line > 0:
+		return m.MigrationFormatErrorAt(strconv.Itoa(fe.Line), fe.File)
 	case errors.Is(err, migration.ErrFormat):
 		return m.MigrationFormatError()
 	case errors.Is(err, migration.ErrEncrypted):

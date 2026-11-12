@@ -1,7 +1,10 @@
 // Package migration reads third-party session exports without modifying them.
 package migration
 
-import "errors"
+import (
+	"errors"
+	"strconv"
+)
 
 type Source string
 
@@ -19,6 +22,9 @@ const (
 	// Text is a host list of key=value lines, typed, pasted or read
 	// from a file; it is not one of the clients Sources lists.
 	Text Source = "Text"
+	// CSV is a host table whose header names the columns with the keys
+	// of a Text host list; it is not one of the clients Sources lists.
+	CSV Source = "CSV"
 )
 
 func Sources() []Source {
@@ -28,6 +34,9 @@ func Sources() []Source {
 type Result struct {
 	Entries []Entry
 	Issues  []Issue
+	// Encoding is the legacy code page files were decoded in, empty when
+	// every file was UTF-8 or UTF-16.
+	Encoding Encoding
 }
 
 // Secrets are transient bytes and must never be serialized to application metadata.
@@ -43,7 +52,12 @@ type Hop struct {
 	Ref, Name, Address, User string
 	Port                     int
 }
-type Issue struct{ Code, Name, Field string }
+
+// Issue is a diagnostic; Line is the source line it is about, 0 when none.
+type Issue struct {
+	Code, Name, Field string
+	Line              int
+}
 
 var (
 	ErrFormat    = errors.New("unsupported or malformed migration format")
@@ -52,3 +66,15 @@ var (
 	ErrRead      = errors.New("cannot read migration input")
 	ErrEncrypted = errors.New("encrypted migration input is not supported")
 )
+
+// FormatError is an ErrFormat at a line of a file: File is its base name,
+// empty when the input was not a file.
+type FormatError struct {
+	File string
+	Line int
+}
+
+func (e *FormatError) Error() string {
+	return ErrFormat.Error() + " at " + e.File + ":" + strconv.Itoa(e.Line)
+}
+func (e *FormatError) Unwrap() error { return ErrFormat }

@@ -93,8 +93,12 @@ func TestOSC52Policy(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "s.json")
 	os.WriteFile(p, []byte(`{"theme":"dark"}`), 0o600)
 	got, err := Load(p)
-	if err != nil || got.OSC52Write != OSC52Ask || got.OSC52MaxBytes != OSC52MaxDefault {
+	if err != nil || got.OSC52Write != OSC52Ask || got.OSC52MaxBytes != OSC52MaxDefault || !got.OSC52Notify {
 		t.Fatalf("old file %+v %v", got, err)
+	}
+	os.WriteFile(p, []byte(`{"osc52Notify":false}`), 0o600)
+	if got, err := Load(p); err != nil || got.OSC52Notify {
+		t.Fatalf("notify off %+v %v", got, err)
 	}
 }
 
@@ -359,6 +363,24 @@ func TestFilesEdge(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, _ := Load(path); got.FilesEdge != FilesBelow || !got.OpenLocalOnStart {
+		t.Errorf("saved %+v", got)
+	}
+}
+
+// TestToolPanes: the rail replaces its pane by default and for any value
+// but side by side, which is kept.
+func TestToolPanes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	os.WriteFile(path, []byte(`{"theme":"dark","toolPanes":"tabs"}`), 0o600)
+	s, err := Load(path)
+	if err != nil || s.ToolPanes != "" {
+		t.Fatalf("old file %+v %v", s, err)
+	}
+	s.ToolPanes = ToolPanesSplit
+	if err := Save(path, s); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := Load(path); got.ToolPanes != ToolPanesSplit {
 		t.Errorf("saved %+v", got)
 	}
 }

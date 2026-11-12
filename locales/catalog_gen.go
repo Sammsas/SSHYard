@@ -1283,6 +1283,26 @@ func (msgs Messages) FontSize() string {
 	return Catalog.Format(msgs.locale, "fontSize", nil)
 }
 
+// FontSizeNote says "Hold Ctrl (⌘ on macOS) and scroll over a terminal to change it"
+// in the language the app shows.
+func FontSizeNote() string { return In(i18n.Locale()).FontSizeNote() }
+
+// FontSizeNote says "Hold Ctrl (⌘ on macOS) and scroll over a terminal to change it"
+// in the language of msgs.
+func (msgs Messages) FontSizeNote() string {
+	return Catalog.Format(msgs.locale, "fontSizeNote", nil)
+}
+
+// FontSizeNow says "Terminal font size: {size}"
+// in the language the app shows.
+func FontSizeNow(size string) string { return In(i18n.Locale()).FontSizeNow(size) }
+
+// FontSizeNow says "Terminal font size: {size}"
+// in the language of msgs.
+func (msgs Messages) FontSizeNow(size string) string {
+	return Catalog.Format(msgs.locale, "fontSizeNow", map[string]any{"size": size})
+}
+
 // TerminalLineHeight says "Line height"
 // in the language the app shows.
 func TerminalLineHeight() string { return In(i18n.Locale()).TerminalLineHeight() }
@@ -2035,6 +2055,46 @@ func TerminalCursorBlinkNote() string { return In(i18n.Locale()).TerminalCursorB
 // in the language of msgs.
 func (msgs Messages) TerminalCursorBlinkNote() string {
 	return Catalog.Format(msgs.locale, "terminalCursorBlinkNote", nil)
+}
+
+// TerminalLineNumbers says "Line numbers"
+// in the language the app shows.
+func TerminalLineNumbers() string { return In(i18n.Locale()).TerminalLineNumbers() }
+
+// TerminalLineNumbers says "Line numbers"
+// in the language of msgs.
+func (msgs Messages) TerminalLineNumbers() string {
+	return Catalog.Format(msgs.locale, "terminalLineNumbers", nil)
+}
+
+// TerminalLineNumbersNote says "Show each line's number left of the terminal"
+// in the language the app shows.
+func TerminalLineNumbersNote() string { return In(i18n.Locale()).TerminalLineNumbersNote() }
+
+// TerminalLineNumbersNote says "Show each line's number left of the terminal"
+// in the language of msgs.
+func (msgs Messages) TerminalLineNumbersNote() string {
+	return Catalog.Format(msgs.locale, "terminalLineNumbersNote", nil)
+}
+
+// TerminalTimestamps says "Timestamps"
+// in the language the app shows.
+func TerminalTimestamps() string { return In(i18n.Locale()).TerminalTimestamps() }
+
+// TerminalTimestamps says "Timestamps"
+// in the language of msgs.
+func (msgs Messages) TerminalTimestamps() string {
+	return Catalog.Format(msgs.locale, "terminalTimestamps", nil)
+}
+
+// TerminalTimestampsNote says "Show when output reached each line, left of the terminal"
+// in the language the app shows.
+func TerminalTimestampsNote() string { return In(i18n.Locale()).TerminalTimestampsNote() }
+
+// TerminalTimestampsNote says "Show when output reached each line, left of the terminal"
+// in the language of msgs.
+func (msgs Messages) TerminalTimestampsNote() string {
+	return Catalog.Format(msgs.locale, "terminalTimestampsNote", nil)
 }
 
 // CursorBlock says "Block"
@@ -5317,6 +5377,26 @@ func (msgs Messages) Osc52LimitHint() string {
 	return Catalog.Format(msgs.locale, "osc52LimitHint", nil)
 }
 
+// Osc52Notify says "Notify on remote copy"
+// in the language the app shows.
+func Osc52Notify() string { return In(i18n.Locale()).Osc52Notify() }
+
+// Osc52Notify says "Notify on remote copy"
+// in the language of msgs.
+func (msgs Messages) Osc52Notify() string {
+	return Catalog.Format(msgs.locale, "osc52Notify", nil)
+}
+
+// Osc52NotifyNote says "Shows who wrote to the clipboard, with Undo. Turn off to copy silently."
+// in the language the app shows.
+func Osc52NotifyNote() string { return In(i18n.Locale()).Osc52NotifyNote() }
+
+// Osc52NotifyNote says "Shows who wrote to the clipboard, with Undo. Turn off to copy silently."
+// in the language of msgs.
+func (msgs Messages) Osc52NotifyNote() string {
+	return Catalog.Format(msgs.locale, "osc52NotifyNote", nil)
+}
+
 // Osc52Wrote says "{host} wrote to the clipboard ({bytes} bytes)"
 // in the language the app shows.
 func Osc52Wrote(host string, bytes string) string { return In(i18n.Locale()).Osc52Wrote(host, bytes) }
@@ -7045,14 +7125,34 @@ func (msgs Messages) AboutSection() string {
 	return Catalog.Format(msgs.locale, "aboutSection", nil)
 }
 
-// AppearanceDesc says "How SSHYard looks: theme, language, translucency, zoom and the interface font."
+// AppearanceDesc says "How SSHYard looks: theme, zoom, background, translucency and the interface font."
 // in the language the app shows.
 func AppearanceDesc() string { return In(i18n.Locale()).AppearanceDesc() }
 
-// AppearanceDesc says "How SSHYard looks: theme, language, translucency, zoom and the interface font."
+// AppearanceDesc says "How SSHYard looks: theme, zoom, background, translucency and the interface font."
 // in the language of msgs.
 func (msgs Messages) AppearanceDesc() string {
 	return Catalog.Format(msgs.locale, "appearanceDesc", nil)
+}
+
+// GeneralDesc says "What applies to all of SSHYard: language, layout, reminders, the window and tray, and updates."
+// in the language the app shows.
+func GeneralDesc() string { return In(i18n.Locale()).GeneralDesc() }
+
+// GeneralDesc says "What applies to all of SSHYard: language, layout, reminders, the window and tray, and updates."
+// in the language of msgs.
+func (msgs Messages) GeneralDesc() string {
+	return Catalog.Format(msgs.locale, "generalDesc", nil)
+}
+
+// WindowTraySection says "Window & Tray"
+// in the language the app shows.
+func WindowTraySection() string { return In(i18n.Locale()).WindowTraySection() }
+
+// WindowTraySection says "Window & Tray"
+// in the language of msgs.
+func (msgs Messages) WindowTraySection() string {
+	return Catalog.Format(msgs.locale, "windowTraySection", nil)
 }
 
 // TerminalDesc says "Fonts, keyword highlighting, connection behaviour and the remote clipboard of terminal panes."
@@ -10313,11 +10413,11 @@ func (msgs Messages) SecuritySftpUnsafePath() string {
 	return Catalog.Format(msgs.locale, "securitySftpUnsafePath", nil)
 }
 
-// SecuritySftpUnsafeDestination says "The destination folder is writable by other users"
+// SecuritySftpUnsafeDestination says "The destination folder is writable by everyone; choose another folder or remove others' write permission (chmod o-w)"
 // in the language the app shows.
 func SecuritySftpUnsafeDestination() string { return In(i18n.Locale()).SecuritySftpUnsafeDestination() }
 
-// SecuritySftpUnsafeDestination says "The destination folder is writable by other users"
+// SecuritySftpUnsafeDestination says "The destination folder is writable by everyone; choose another folder or remove others' write permission (chmod o-w)"
 // in the language of msgs.
 func (msgs Messages) SecuritySftpUnsafeDestination() string {
 	return Catalog.Format(msgs.locale, "securitySftpUnsafeDestination", nil)
@@ -10777,6 +10877,100 @@ func BackupDamaged() string { return In(i18n.Locale()).BackupDamaged() }
 // in the language of msgs.
 func (msgs Messages) BackupDamaged() string {
 	return Catalog.Format(msgs.locale, "backupDamaged", nil)
+}
+
+// BackupTooCostly says "This backup needs more memory or time to open than SSHYard allows, so it can’t be opened."
+// in the language the app shows.
+func BackupTooCostly() string { return In(i18n.Locale()).BackupTooCostly() }
+
+// BackupTooCostly says "This backup needs more memory or time to open than SSHYard allows, so it can’t be opened."
+// in the language of msgs.
+func (msgs Messages) BackupTooCostly() string {
+	return Catalog.Format(msgs.locale, "backupTooCostly", nil)
+}
+
+// CostlyTitle says "This May Take a While"
+// in the language the app shows.
+func CostlyTitle() string { return In(i18n.Locale()).CostlyTitle() }
+
+// CostlyTitle says "This May Take a While"
+// in the language of msgs.
+func (msgs Messages) CostlyTitle() string {
+	return Catalog.Format(msgs.locale, "costlyTitle", nil)
+}
+
+// CostlyBackup says "This backup’s password is protected with stronger settings than usual: opening it can use up to {memory} of memory …"
+// in the language the app shows.
+func CostlyBackup(memory string, passes string) string {
+	return In(i18n.Locale()).CostlyBackup(memory, passes)
+}
+
+// CostlyBackup says "This backup’s password is protected with stronger settings than usual: opening it can use up to {memory} of memory …"
+// in the language of msgs.
+func (msgs Messages) CostlyBackup(memory string, passes string) string {
+	return Catalog.Format(msgs.locale, "costlyBackup", map[string]any{"memory": memory, "passes": passes})
+}
+
+// CostlyKey says "This key’s passphrase is protected with stronger settings than usual: opening it can use up to {memory} of memory o…"
+// in the language the app shows.
+func CostlyKey(memory string, passes string) string {
+	return In(i18n.Locale()).CostlyKey(memory, passes)
+}
+
+// CostlyKey says "This key’s passphrase is protected with stronger settings than usual: opening it can use up to {memory} of memory o…"
+// in the language of msgs.
+func (msgs Messages) CostlyKey(memory string, passes string) string {
+	return Catalog.Format(msgs.locale, "costlyKey", map[string]any{"memory": memory, "passes": passes})
+}
+
+// CostlyContinue says "Continue"
+// in the language the app shows.
+func CostlyContinue() string { return In(i18n.Locale()).CostlyContinue() }
+
+// CostlyContinue says "Continue"
+// in the language of msgs.
+func (msgs Messages) CostlyContinue() string {
+	return Catalog.Format(msgs.locale, "costlyContinue", nil)
+}
+
+// CostlyOpening says "Opening…"
+// in the language the app shows.
+func CostlyOpening() string { return In(i18n.Locale()).CostlyOpening() }
+
+// CostlyOpening says "Opening…"
+// in the language of msgs.
+func (msgs Messages) CostlyOpening() string {
+	return Catalog.Format(msgs.locale, "costlyOpening", nil)
+}
+
+// CostlyBusyNote says "Cancelling stops here, but the computation already under way finishes in the background and its result is discarded."
+// in the language the app shows.
+func CostlyBusyNote() string { return In(i18n.Locale()).CostlyBusyNote() }
+
+// CostlyBusyNote says "Cancelling stops here, but the computation already under way finishes in the background and its result is discarded."
+// in the language of msgs.
+func (msgs Messages) CostlyBusyNote() string {
+	return Catalog.Format(msgs.locale, "costlyBusyNote", nil)
+}
+
+// ErrKeyTooCostly says "This key needs more memory or time to open than SSHYard allows. Save it again in PuTTYgen with lower Argon2 settings."
+// in the language the app shows.
+func ErrKeyTooCostly() string { return In(i18n.Locale()).ErrKeyTooCostly() }
+
+// ErrKeyTooCostly says "This key needs more memory or time to open than SSHYard allows. Save it again in PuTTYgen with lower Argon2 settings."
+// in the language of msgs.
+func (msgs Messages) ErrKeyTooCostly() string {
+	return Catalog.Format(msgs.locale, "errKeyTooCostly", nil)
+}
+
+// ErrKeyCostly says "This key needs more memory or time to open than usual."
+// in the language the app shows.
+func ErrKeyCostly() string { return In(i18n.Locale()).ErrKeyCostly() }
+
+// ErrKeyCostly says "This key needs more memory or time to open than usual."
+// in the language of msgs.
+func (msgs Messages) ErrKeyCostly() string {
+	return Catalog.Format(msgs.locale, "errKeyCostly", nil)
 }
 
 // CloudBackupSection says "Cloud Backup"
@@ -12441,6 +12635,228 @@ func (msgs Messages) SecretsReasonLinuxLocked() string {
 	return Catalog.Format(msgs.locale, "secretsReasonLinuxLocked", nil)
 }
 
+// SecretsReasonLinuxMissing says "No Secret Service credential service is available in this session."
+// in the language the app shows.
+func SecretsReasonLinuxMissing() string { return In(i18n.Locale()).SecretsReasonLinuxMissing() }
+
+// SecretsReasonLinuxMissing says "No Secret Service credential service is available in this session."
+// in the language of msgs.
+func (msgs Messages) SecretsReasonLinuxMissing() string {
+	return Catalog.Format(msgs.locale, "secretsReasonLinuxMissing", nil)
+}
+
+// SecretsReasonLinuxTimeout says "The credential service did not respond; try again later."
+// in the language the app shows.
+func SecretsReasonLinuxTimeout() string { return In(i18n.Locale()).SecretsReasonLinuxTimeout() }
+
+// SecretsReasonLinuxTimeout says "The credential service did not respond; try again later."
+// in the language of msgs.
+func (msgs Messages) SecretsReasonLinuxTimeout() string {
+	return Catalog.Format(msgs.locale, "secretsReasonLinuxTimeout", nil)
+}
+
+// SecretsReasonPasswordRequired says "The local master password is required."
+// in the language the app shows.
+func SecretsReasonPasswordRequired() string { return In(i18n.Locale()).SecretsReasonPasswordRequired() }
+
+// SecretsReasonPasswordRequired says "The local master password is required."
+// in the language of msgs.
+func (msgs Messages) SecretsReasonPasswordRequired() string {
+	return Catalog.Format(msgs.locale, "secretsReasonPasswordRequired", nil)
+}
+
+// SecretsReasonPasswordSetup says "Encrypted secrets already exist, so a local master password cannot be set up; restore access to the system keychain f…"
+// in the language the app shows.
+func SecretsReasonPasswordSetup() string { return In(i18n.Locale()).SecretsReasonPasswordSetup() }
+
+// SecretsReasonPasswordSetup says "Encrypted secrets already exist, so a local master password cannot be set up; restore access to the system keychain f…"
+// in the language of msgs.
+func (msgs Messages) SecretsReasonPasswordSetup() string {
+	return Catalog.Format(msgs.locale, "secretsReasonPasswordSetup", nil)
+}
+
+// SecretsStageMasterPassword says "Reading the local master key"
+// in the language the app shows.
+func SecretsStageMasterPassword() string { return In(i18n.Locale()).SecretsStageMasterPassword() }
+
+// SecretsStageMasterPassword says "Reading the local master key"
+// in the language of msgs.
+func (msgs Messages) SecretsStageMasterPassword() string {
+	return Catalog.Format(msgs.locale, "secretsStageMasterPassword", nil)
+}
+
+// SecretsStageWriteMasterPassword says "Saving the local master key"
+// in the language the app shows.
+func SecretsStageWriteMasterPassword() string {
+	return In(i18n.Locale()).SecretsStageWriteMasterPassword()
+}
+
+// SecretsStageWriteMasterPassword says "Saving the local master key"
+// in the language of msgs.
+func (msgs Messages) SecretsStageWriteMasterPassword() string {
+	return Catalog.Format(msgs.locale, "secretsStageWriteMasterPassword", nil)
+}
+
+// SecretsMasterPassword says "Encrypted local store; master key protected by a local master password"
+// in the language the app shows.
+func SecretsMasterPassword() string { return In(i18n.Locale()).SecretsMasterPassword() }
+
+// SecretsMasterPassword says "Encrypted local store; master key protected by a local master password"
+// in the language of msgs.
+func (msgs Messages) SecretsMasterPassword() string {
+	return Catalog.Format(msgs.locale, "secretsMasterPassword", nil)
+}
+
+// CopyDiagnostics says "Copy diagnostics"
+// in the language the app shows.
+func CopyDiagnostics() string { return In(i18n.Locale()).CopyDiagnostics() }
+
+// CopyDiagnostics says "Copy diagnostics"
+// in the language of msgs.
+func (msgs Messages) CopyDiagnostics() string {
+	return Catalog.Format(msgs.locale, "copyDiagnostics", nil)
+}
+
+// MasterPassword says "Local master password"
+// in the language the app shows.
+func MasterPassword() string { return In(i18n.Locale()).MasterPassword() }
+
+// MasterPassword says "Local master password"
+// in the language of msgs.
+func (msgs Messages) MasterPassword() string {
+	return Catalog.Format(msgs.locale, "masterPassword", nil)
+}
+
+// CurrentMasterPassword says "Current master password"
+// in the language the app shows.
+func CurrentMasterPassword() string { return In(i18n.Locale()).CurrentMasterPassword() }
+
+// CurrentMasterPassword says "Current master password"
+// in the language of msgs.
+func (msgs Messages) CurrentMasterPassword() string {
+	return Catalog.Format(msgs.locale, "currentMasterPassword", nil)
+}
+
+// NewMasterPassword says "New master password"
+// in the language the app shows.
+func NewMasterPassword() string { return In(i18n.Locale()).NewMasterPassword() }
+
+// NewMasterPassword says "New master password"
+// in the language of msgs.
+func (msgs Messages) NewMasterPassword() string {
+	return Catalog.Format(msgs.locale, "newMasterPassword", nil)
+}
+
+// MasterPasswordWrong says "The master password is incorrect."
+// in the language the app shows.
+func MasterPasswordWrong() string { return In(i18n.Locale()).MasterPasswordWrong() }
+
+// MasterPasswordWrong says "The master password is incorrect."
+// in the language of msgs.
+func (msgs Messages) MasterPasswordWrong() string {
+	return Catalog.Format(msgs.locale, "masterPasswordWrong", nil)
+}
+
+// MasterPasswordUnlock says "Unlock"
+// in the language the app shows.
+func MasterPasswordUnlock() string { return In(i18n.Locale()).MasterPasswordUnlock() }
+
+// MasterPasswordUnlock says "Unlock"
+// in the language of msgs.
+func (msgs Messages) MasterPasswordUnlock() string {
+	return Catalog.Format(msgs.locale, "masterPasswordUnlock", nil)
+}
+
+// MasterPasswordUnlockTitle says "Enter local master password"
+// in the language the app shows.
+func MasterPasswordUnlockTitle() string { return In(i18n.Locale()).MasterPasswordUnlockTitle() }
+
+// MasterPasswordUnlockTitle says "Enter local master password"
+// in the language of msgs.
+func (msgs Messages) MasterPasswordUnlockTitle() string {
+	return Catalog.Format(msgs.locale, "masterPasswordUnlockTitle", nil)
+}
+
+// MasterPasswordUnlockNote says "A local master password protects your saved secrets. Enter it to unlock them."
+// in the language the app shows.
+func MasterPasswordUnlockNote() string { return In(i18n.Locale()).MasterPasswordUnlockNote() }
+
+// MasterPasswordUnlockNote says "A local master password protects your saved secrets. Enter it to unlock them."
+// in the language of msgs.
+func (msgs Messages) MasterPasswordUnlockNote() string {
+	return Catalog.Format(msgs.locale, "masterPasswordUnlockNote", nil)
+}
+
+// UseMasterPasswordEllipsis says "Use local master password…"
+// in the language the app shows.
+func UseMasterPasswordEllipsis() string { return In(i18n.Locale()).UseMasterPasswordEllipsis() }
+
+// UseMasterPasswordEllipsis says "Use local master password…"
+// in the language of msgs.
+func (msgs Messages) UseMasterPasswordEllipsis() string {
+	return Catalog.Format(msgs.locale, "useMasterPasswordEllipsis", nil)
+}
+
+// MasterPasswordSetupTitle says "Use a local master password"
+// in the language the app shows.
+func MasterPasswordSetupTitle() string { return In(i18n.Locale()).MasterPasswordSetupTitle() }
+
+// MasterPasswordSetupTitle says "Use a local master password"
+// in the language of msgs.
+func (msgs Messages) MasterPasswordSetupTitle() string {
+	return Catalog.Format(msgs.locale, "masterPasswordSetupTitle", nil)
+}
+
+// MasterPasswordSetupNote says "When the system keychain is unavailable, a local master password can protect the master key instead, with no administ…"
+// in the language the app shows.
+func MasterPasswordSetupNote() string { return In(i18n.Locale()).MasterPasswordSetupNote() }
+
+// MasterPasswordSetupNote says "When the system keychain is unavailable, a local master password can protect the master key instead, with no administ…"
+// in the language of msgs.
+func (msgs Messages) MasterPasswordSetupNote() string {
+	return Catalog.Format(msgs.locale, "masterPasswordSetupNote", nil)
+}
+
+// MasterPasswordChangeTitle says "Change local master password"
+// in the language the app shows.
+func MasterPasswordChangeTitle() string { return In(i18n.Locale()).MasterPasswordChangeTitle() }
+
+// MasterPasswordChangeTitle says "Change local master password"
+// in the language of msgs.
+func (msgs Messages) MasterPasswordChangeTitle() string {
+	return Catalog.Format(msgs.locale, "masterPasswordChangeTitle", nil)
+}
+
+// UseSystemKeychainEllipsis says "Use system keychain…"
+// in the language the app shows.
+func UseSystemKeychainEllipsis() string { return In(i18n.Locale()).UseSystemKeychainEllipsis() }
+
+// UseSystemKeychainEllipsis says "Use system keychain…"
+// in the language of msgs.
+func (msgs Messages) UseSystemKeychainEllipsis() string {
+	return Catalog.Format(msgs.locale, "useSystemKeychainEllipsis", nil)
+}
+
+// MasterPasswordSystemTitle says "Use the system keychain"
+// in the language the app shows.
+func MasterPasswordSystemTitle() string { return In(i18n.Locale()).MasterPasswordSystemTitle() }
+
+// MasterPasswordSystemTitle says "Use the system keychain"
+// in the language of msgs.
+func (msgs Messages) MasterPasswordSystemTitle() string {
+	return Catalog.Format(msgs.locale, "masterPasswordSystemTitle", nil)
+}
+
+// MasterPasswordSystemNote says "Enter the current master password to move the master key to the system keychain. You will no longer need the local ma…"
+// in the language the app shows.
+func MasterPasswordSystemNote() string { return In(i18n.Locale()).MasterPasswordSystemNote() }
+
+// MasterPasswordSystemNote says "Enter the current master password to move the master key to the system keychain. You will no longer need the local ma…"
+// in the language of msgs.
+func (msgs Messages) MasterPasswordSystemNote() string {
+	return Catalog.Format(msgs.locale, "masterPasswordSystemNote", nil)
+}
+
 // SecretsReasonCancelled says "System authorization was cancelled."
 // in the language the app shows.
 func SecretsReasonCancelled() string { return In(i18n.Locale()).SecretsReasonCancelled() }
@@ -13979,6 +14395,26 @@ func (msgs Messages) AiHTTPFailedDetail(status string, detail string) string {
 	return Catalog.Format(msgs.locale, "aiHTTPFailedDetail", map[string]any{"status": status, "detail": detail})
 }
 
+// AiAuditUnavailable says "The AI audit log is unavailable, so the command was not run: {reason}"
+// in the language the app shows.
+func AiAuditUnavailable(reason string) string { return In(i18n.Locale()).AiAuditUnavailable(reason) }
+
+// AiAuditUnavailable says "The AI audit log is unavailable, so the command was not run: {reason}"
+// in the language of msgs.
+func (msgs Messages) AiAuditUnavailable(reason string) string {
+	return Catalog.Format(msgs.locale, "aiAuditUnavailable", map[string]any{"reason": reason})
+}
+
+// AiAuditRecordFailed says "The command ran, but its audit record could not be saved: {reason}"
+// in the language the app shows.
+func AiAuditRecordFailed(reason string) string { return In(i18n.Locale()).AiAuditRecordFailed(reason) }
+
+// AiAuditRecordFailed says "The command ran, but its audit record could not be saved: {reason}"
+// in the language of msgs.
+func (msgs Messages) AiAuditRecordFailed(reason string) string {
+	return Catalog.Format(msgs.locale, "aiAuditRecordFailed", map[string]any{"reason": reason})
+}
+
 // AiReviewProviderNote says "In Review mode, read-only operations run, critical ones always ask you, and the selected model checks the rest agains…"
 // in the language the app shows.
 func AiReviewProviderNote() string { return In(i18n.Locale()).AiReviewProviderNote() }
@@ -14821,6 +15257,26 @@ func (msgs Messages) PaletteInSettings(page string) string {
 	return Catalog.Format(msgs.locale, "paletteInSettings", map[string]any{"page": page})
 }
 
+// SearchSettings says "Search settings"
+// in the language the app shows.
+func SearchSettings() string { return In(i18n.Locale()).SearchSettings() }
+
+// SearchSettings says "Search settings"
+// in the language of msgs.
+func (msgs Messages) SearchSettings() string {
+	return Catalog.Format(msgs.locale, "searchSettings", nil)
+}
+
+// SettingsNoResults says "No matching settings"
+// in the language the app shows.
+func SettingsNoResults() string { return In(i18n.Locale()).SettingsNoResults() }
+
+// SettingsNoResults says "No matching settings"
+// in the language of msgs.
+func (msgs Messages) SettingsNoResults() string {
+	return Catalog.Format(msgs.locale, "settingsNoResults", nil)
+}
+
 // ShortcutRecord says "Record a shortcut for “{action}”"
 // in the language the app shows.
 func ShortcutRecord(action string) string { return In(i18n.Locale()).ShortcutRecord(action) }
@@ -15287,6 +15743,70 @@ func (msgs Messages) MigrationFormatError() string {
 	return Catalog.Format(msgs.locale, "migrationFormatError", nil)
 }
 
+// MigrationFormatErrorAt says "Unsupported or damaged export at line {line} of {file}; choose the matching source and export format"
+// in the language the app shows.
+func MigrationFormatErrorAt(line string, file string) string {
+	return In(i18n.Locale()).MigrationFormatErrorAt(line, file)
+}
+
+// MigrationFormatErrorAt says "Unsupported or damaged export at line {line} of {file}; choose the matching source and export format"
+// in the language of msgs.
+func (msgs Messages) MigrationFormatErrorAt(line string, file string) string {
+	return Catalog.Format(msgs.locale, "migrationFormatErrorAt", map[string]any{"line": line, "file": file})
+}
+
+// MigrationLine says "line {line}"
+// in the language the app shows.
+func MigrationLine(line string) string { return In(i18n.Locale()).MigrationLine(line) }
+
+// MigrationLine says "line {line}"
+// in the language of msgs.
+func (msgs Messages) MigrationLine(line string) string {
+	return Catalog.Format(msgs.locale, "migrationLine", map[string]any{"line": line})
+}
+
+// MigrationDamagedEntry says "Damaged session skipped"
+// in the language the app shows.
+func MigrationDamagedEntry() string { return In(i18n.Locale()).MigrationDamagedEntry() }
+
+// MigrationDamagedEntry says "Damaged session skipped"
+// in the language of msgs.
+func (msgs Messages) MigrationDamagedEntry() string {
+	return Catalog.Format(msgs.locale, "migrationDamagedEntry", nil)
+}
+
+// MigrationDefaultUser says "No default user name found; the local user name is used, check it before saving"
+// in the language the app shows.
+func MigrationDefaultUser() string { return In(i18n.Locale()).MigrationDefaultUser() }
+
+// MigrationDefaultUser says "No default user name found; the local user name is used, check it before saving"
+// in the language of msgs.
+func (msgs Messages) MigrationDefaultUser() string {
+	return Catalog.Format(msgs.locale, "migrationDefaultUser", nil)
+}
+
+// MigrationEncoding says "File encoding"
+// in the language the app shows.
+func MigrationEncoding() string { return In(i18n.Locale()).MigrationEncoding() }
+
+// MigrationEncoding says "File encoding"
+// in the language of msgs.
+func (msgs Messages) MigrationEncoding() string {
+	return Catalog.Format(msgs.locale, "migrationEncoding", nil)
+}
+
+// MigrationEncodingNote says "The file is not UTF-8 and was read as {encoding}; if text looks garbled, choose another encoding"
+// in the language the app shows.
+func MigrationEncodingNote(encoding string) string {
+	return In(i18n.Locale()).MigrationEncodingNote(encoding)
+}
+
+// MigrationEncodingNote says "The file is not UTF-8 and was read as {encoding}; if text looks garbled, choose another encoding"
+// in the language of msgs.
+func (msgs Messages) MigrationEncodingNote(encoding string) string {
+	return Catalog.Format(msgs.locale, "migrationEncodingNote", map[string]any{"encoding": encoding})
+}
+
 // MigrationTooLarge says "Source exceeds the limit of 32 MiB or 1,024 files; select a smaller batch"
 // in the language the app shows.
 func MigrationTooLarge() string { return In(i18n.Locale()).MigrationTooLarge() }
@@ -15335,6 +15855,26 @@ func MigrationTextChooseFile() string { return In(i18n.Locale()).MigrationTextCh
 // in the language of msgs.
 func (msgs Messages) MigrationTextChooseFile() string {
 	return Catalog.Format(msgs.locale, "migrationTextChooseFile", nil)
+}
+
+// MigrationCSV says "CSV import"
+// in the language the app shows.
+func MigrationCSV() string { return In(i18n.Locale()).MigrationCSV() }
+
+// MigrationCSV says "CSV import"
+// in the language of msgs.
+func (msgs Messages) MigrationCSV() string {
+	return Catalog.Format(msgs.locale, "migrationCSV", nil)
+}
+
+// MigrationCSVChooseFile says "Choose CSV file"
+// in the language the app shows.
+func MigrationCSVChooseFile() string { return In(i18n.Locale()).MigrationCSVChooseFile() }
+
+// MigrationCSVChooseFile says "Choose CSV file"
+// in the language of msgs.
+func (msgs Messages) MigrationCSVChooseFile() string {
+	return Catalog.Format(msgs.locale, "migrationCSVChooseFile", nil)
 }
 
 // MigrationTextHelp says "One host per line, as key=value fields separated by spaces: host or ip, port, user or username, password, and title, …"
@@ -15659,6 +16199,46 @@ func OpenFilesSplit() string { return In(i18n.Locale()).OpenFilesSplit() }
 // in the language of msgs.
 func (msgs Messages) OpenFilesSplit() string {
 	return Catalog.Format(msgs.locale, "openFilesSplit", nil)
+}
+
+// ToolPanes says "Rail tools"
+// in the language the app shows.
+func ToolPanes() string { return In(i18n.Locale()).ToolPanes() }
+
+// ToolPanes says "Rail tools"
+// in the language of msgs.
+func (msgs Messages) ToolPanes() string {
+	return Catalog.Format(msgs.locale, "toolPanes", nil)
+}
+
+// ToolPanesNote says "Replace shows one tool at a time in its place; Side by side keeps every tool you open, opening the ones past three, o…"
+// in the language the app shows.
+func ToolPanesNote() string { return In(i18n.Locale()).ToolPanesNote() }
+
+// ToolPanesNote says "Replace shows one tool at a time in its place; Side by side keeps every tool you open, opening the ones past three, o…"
+// in the language of msgs.
+func (msgs Messages) ToolPanesNote() string {
+	return Catalog.Format(msgs.locale, "toolPanesNote", nil)
+}
+
+// ToolPanesSplit says "Side by side"
+// in the language the app shows.
+func ToolPanesSplit() string { return In(i18n.Locale()).ToolPanesSplit() }
+
+// ToolPanesSplit says "Side by side"
+// in the language of msgs.
+func (msgs Messages) ToolPanesSplit() string {
+	return Catalog.Format(msgs.locale, "toolPanesSplit", nil)
+}
+
+// ToolPanesTabs says "Replace"
+// in the language the app shows.
+func ToolPanesTabs() string { return In(i18n.Locale()).ToolPanesTabs() }
+
+// ToolPanesTabs says "Replace"
+// in the language of msgs.
+func (msgs Messages) ToolPanesTabs() string {
+	return Catalog.Format(msgs.locale, "toolPanesTabs", nil)
 }
 
 // FilesEdge says "Open files from a terminal"
@@ -17805,4 +18385,196 @@ func HistoryBashTipTitle() string { return In(i18n.Locale()).HistoryBashTipTitle
 // in the language of msgs.
 func (msgs Messages) HistoryBashTipTitle() string {
 	return Catalog.Format(msgs.locale, "historyBashTipTitle", nil)
+}
+
+// FilesZoom says "Files zoom"
+// in the language the app shows.
+func FilesZoom() string { return In(i18n.Locale()).FilesZoom() }
+
+// FilesZoom says "Files zoom"
+// in the language of msgs.
+func (msgs Messages) FilesZoom() string {
+	return Catalog.Format(msgs.locale, "filesZoom", nil)
+}
+
+// FilesZoomNote says "How large the names and rows of files panes show"
+// in the language the app shows.
+func FilesZoomNote() string { return In(i18n.Locale()).FilesZoomNote() }
+
+// FilesZoomNote says "How large the names and rows of files panes show"
+// in the language of msgs.
+func (msgs Messages) FilesZoomNote() string {
+	return Catalog.Format(msgs.locale, "filesZoomNote", nil)
+}
+
+// SftpSudo says "Files (SFTP)"
+// in the language the app shows.
+func SftpSudo() string { return In(i18n.Locale()).SftpSudo() }
+
+// SftpSudo says "Files (SFTP)"
+// in the language of msgs.
+func (msgs Messages) SftpSudo() string {
+	return Catalog.Format(msgs.locale, "sftpSudo", nil)
+}
+
+// SftpSudoOn says "Open files as root with sudo"
+// in the language the app shows.
+func SftpSudoOn() string { return In(i18n.Locale()).SftpSudoOn() }
+
+// SftpSudoOn says "Open files as root with sudo"
+// in the language of msgs.
+func (msgs Messages) SftpSudoOn() string {
+	return Catalog.Format(msgs.locale, "sftpSudoOn", nil)
+}
+
+// SftpSudoHint says "Files panes run the server's sftp-server through sudo and can change any file. sudo gets the login password, or asks …"
+// in the language the app shows.
+func SftpSudoHint() string { return In(i18n.Locale()).SftpSudoHint() }
+
+// SftpSudoHint says "Files panes run the server's sftp-server through sudo and can change any file. sudo gets the login password, or asks …"
+// in the language of msgs.
+func (msgs Messages) SftpSudoHint() string {
+	return Catalog.Format(msgs.locale, "sftpSudoHint", nil)
+}
+
+// SudoPromptTitle says "sudo password for {host}"
+// in the language the app shows.
+func SudoPromptTitle(host string) string { return In(i18n.Locale()).SudoPromptTitle(host) }
+
+// SudoPromptTitle says "sudo password for {host}"
+// in the language of msgs.
+func (msgs Messages) SudoPromptTitle(host string) string {
+	return Catalog.Format(msgs.locale, "sudoPromptTitle", map[string]any{"host": host})
+}
+
+// SudoPasswordRefused says "sudo refused the password."
+// in the language the app shows.
+func SudoPasswordRefused() string { return In(i18n.Locale()).SudoPasswordRefused() }
+
+// SudoPasswordRefused says "sudo refused the password."
+// in the language of msgs.
+func (msgs Messages) SudoPasswordRefused() string {
+	return Catalog.Format(msgs.locale, "sudoPasswordRefused", nil)
+}
+
+// SudoPasswordNeeded says "sudo needs a password to open the files as root."
+// in the language the app shows.
+func SudoPasswordNeeded() string { return In(i18n.Locale()).SudoPasswordNeeded() }
+
+// SudoPasswordNeeded says "sudo needs a password to open the files as root."
+// in the language of msgs.
+func (msgs Messages) SudoPasswordNeeded() string {
+	return Catalog.Format(msgs.locale, "sudoPasswordNeeded", nil)
+}
+
+// SudoEnterPassword says "Enter sudo password"
+// in the language the app shows.
+func SudoEnterPassword() string { return In(i18n.Locale()).SudoEnterPassword() }
+
+// SudoEnterPassword says "Enter sudo password"
+// in the language of msgs.
+func (msgs Messages) SudoEnterPassword() string {
+	return Catalog.Format(msgs.locale, "sudoEnterPassword", nil)
+}
+
+// SudoSubmit says "Open files"
+// in the language the app shows.
+func SudoSubmit() string { return In(i18n.Locale()).SudoSubmit() }
+
+// SudoSubmit says "Open files"
+// in the language of msgs.
+func (msgs Messages) SudoSubmit() string {
+	return Catalog.Format(msgs.locale, "sudoSubmit", nil)
+}
+
+// SudoFailed says "sudo could not start SFTP: {reason}"
+// in the language the app shows.
+func SudoFailed(reason string) string { return In(i18n.Locale()).SudoFailed(reason) }
+
+// SudoFailed says "sudo could not start SFTP: {reason}"
+// in the language of msgs.
+func (msgs Messages) SudoFailed(reason string) string {
+	return Catalog.Format(msgs.locale, "sudoFailed", map[string]any{"reason": reason})
+}
+
+// SudoNoServer says "no sftp-server found on the server"
+// in the language the app shows.
+func SudoNoServer() string { return In(i18n.Locale()).SudoNoServer() }
+
+// SudoNoServer says "no sftp-server found on the server"
+// in the language of msgs.
+func (msgs Messages) SudoNoServer() string {
+	return Catalog.Format(msgs.locale, "sudoNoServer", nil)
+}
+
+// SudoRetry says "Try sudo again"
+// in the language the app shows.
+func SudoRetry() string { return In(i18n.Locale()).SudoRetry() }
+
+// SudoRetry says "Try sudo again"
+// in the language of msgs.
+func (msgs Messages) SudoRetry() string {
+	return Catalog.Format(msgs.locale, "sudoRetry", nil)
+}
+
+// ChallengeTitle says "Login verification for {target}"
+// in the language the app shows.
+func ChallengeTitle(target string) string { return In(i18n.Locale()).ChallengeTitle(target) }
+
+// ChallengeTitle says "Login verification for {target}"
+// in the language of msgs.
+func (msgs Messages) ChallengeTitle(target string) string {
+	return Catalog.Format(msgs.locale, "challengeTitle", map[string]any{"target": target})
+}
+
+// ChallengeAnswer says "Answer to “{question}”"
+// in the language the app shows.
+func ChallengeAnswer(question string) string { return In(i18n.Locale()).ChallengeAnswer(question) }
+
+// ChallengeAnswer says "Answer to “{question}”"
+// in the language of msgs.
+func (msgs Messages) ChallengeAnswer(question string) string {
+	return Catalog.Format(msgs.locale, "challengeAnswer", map[string]any{"question": question})
+}
+
+// ChallengeHint says "Sent to the server for this login only, never saved."
+// in the language the app shows.
+func ChallengeHint() string { return In(i18n.Locale()).ChallengeHint() }
+
+// ChallengeHint says "Sent to the server for this login only, never saved."
+// in the language of msgs.
+func (msgs Messages) ChallengeHint() string {
+	return Catalog.Format(msgs.locale, "challengeHint", nil)
+}
+
+// ChallengeSubmit says "Continue"
+// in the language the app shows.
+func ChallengeSubmit() string { return In(i18n.Locale()).ChallengeSubmit() }
+
+// ChallengeSubmit says "Continue"
+// in the language of msgs.
+func (msgs Messages) ChallengeSubmit() string {
+	return Catalog.Format(msgs.locale, "challengeSubmit", nil)
+}
+
+// ErrChallengeCanceled says "Login to {host} was canceled: its verification questions were not answered."
+// in the language the app shows.
+func ErrChallengeCanceled(host string) string { return In(i18n.Locale()).ErrChallengeCanceled(host) }
+
+// ErrChallengeCanceled says "Login to {host} was canceled: its verification questions were not answered."
+// in the language of msgs.
+func (msgs Messages) ErrChallengeCanceled(host string) string {
+	return Catalog.Format(msgs.locale, "errChallengeCanceled", map[string]any{"host": host})
+}
+
+// ErrChallengeUnattended says "{host} asks for a verification code or other input to log in, which this connection cannot ask. Connect from a termin…"
+// in the language the app shows.
+func ErrChallengeUnattended(host string) string {
+	return In(i18n.Locale()).ErrChallengeUnattended(host)
+}
+
+// ErrChallengeUnattended says "{host} asks for a verification code or other input to log in, which this connection cannot ask. Connect from a termin…"
+// in the language of msgs.
+func (msgs Messages) ErrChallengeUnattended(host string) string {
+	return Catalog.Format(msgs.locale, "errChallengeUnattended", map[string]any{"host": host})
 }

@@ -39,57 +39,39 @@ func (a *App) aiPane(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, tok
 	}
 	head := ui.Column(c.Key("aihead")).Shrink(0).FillWidth()
 	head.Children(func() {
-		row := ui.Row(c.Key("head")).Height(paneHeadHeight).Shrink(0).Padding(0, 6, 0, 10).Gap(8).AlignItems(ui.Center).Drag(dragSession{ID: cn.id}).Label(m.PaneActions())
-		row.Children(func() {
+		title := m.AiPane(a.pv(cn.host.Label()))
+		split := func(edge layout.Edge) func() {
+			return func() {
+				t.Focus = n.ID
+				a.SplitFocused(edge)
+			}
+		}
+		empty := len(cn.ai.items) == 0
+		acts := []barAction{
+			{Key: "agent", Show: func() ui.Element { return a.agentChip(c, cn, tok, m, headFit) }},
+			{Key: "newchat", Button: IconButton{Icon: icons.NewChat, Label: m.AiNewChat(), Size: Tiny, Disabled: cn.ai.running || empty},
+				Do: func() { a.NewChat(cn.id) }},
+			{Key: "history", Show: func() ui.Element { return a.historyButton(c, cn, tok, m) }},
+			{Key: "splitright", Button: IconButton{Icon: icons.SplitRight, Label: m.SplitRight(), Size: Tiny}, Do: split(layout.Right)},
+			{Key: "splitdown", Button: IconButton{Icon: icons.SplitDown, Label: m.SplitDown(), Size: Tiny}, Do: split(layout.Bottom)},
+		}
+		row := a.paneHead(c, cn, m, func() {
 			softTile(c, kindIcon(layout.AI, t.Focus == n.ID), hostTint(tok, a.liveHost(cn.host)), paneHeadIcon)
-			title := ui.Text(c, m.AiPane(a.pv(cn.host.Label()))).FontWeight(600).FontSize(theme.Footnote).SingleLine().Shrink(1).MinWidth(0)
+			tt := ui.Text(c, title).FontWeight(600).FontSize(theme.Footnote).SingleLine().Shrink(1).MinWidth(0)
 			if t.Focus != n.ID && len(t.Panes()) > 1 {
-				title.TextColor(tok.TextMuted)
+				tt.TextColor(tok.TextMuted)
 			}
 			if isTemp(cn.host.ID) {
 				tempBadge(c, m, tok)
 			}
-			ui.Spacer(c).Shrink(1)
-			a.agentChip(c, cn, tok, m, headFit)
-			split := func(edge layout.Edge) func() {
-				return func() {
-					t.Focus = n.ID
-					a.SplitFocused(edge)
+		}, paneHeadIcon+8+titleRoom(c, title), acts, func() []menuEntry {
+			return []menuEntry{{Icon: icons.Clear, Label: m.AiClearChat(), Danger: true, Disabled: cn.ai.running || empty, Do: func() {
+				if cn.ai.conv == "" {
+					a.ClearChat(cn.id)
+					return
 				}
-			}
-			empty := len(cn.ai.items) == 0
-			if (IconButton{Icon: icons.NewChat, Label: m.AiNewChat(), Size: Tiny, Disabled: cn.ai.running || empty}).Clicked(c, "newchat") {
-				a.NewChat(cn.id)
-			}
-			a.historyButton(c, cn, tok, m)
-			narrow := w > 0 && w < aiHeadMenuWidth
-			if !narrow {
-				if (IconButton{Icon: icons.SplitRight, Label: m.SplitRight(), Size: Tiny}).Clicked(c, "splitright") {
-					split(layout.Right)()
-				}
-				if (IconButton{Icon: icons.SplitDown, Label: m.SplitDown(), Size: Tiny}).Clicked(c, "splitdown") {
-					split(layout.Bottom)()
-				}
-			}
-			a.menuButton(c, "aimore:"+strconv.Itoa(cn.id), IconButton{Icon: icons.More, Label: m.MoreActions(), Size: Tiny}, func() []menuEntry {
-				var es []menuEntry
-				if narrow {
-					es = append(es,
-						menuEntry{Icon: icons.SplitRight, Label: m.SplitRight(), Do: split(layout.Right)},
-						menuEntry{Icon: icons.SplitDown, Label: m.SplitDown(), Do: split(layout.Bottom)},
-						menuSep)
-				}
-				return append(es, menuEntry{Icon: icons.Clear, Label: m.AiClearChat(), Danger: true, Disabled: cn.ai.running || empty, Do: func() {
-					if cn.ai.conv == "" {
-						a.ClearChat(cn.id)
-						return
-					}
-					cn.ai.drop = cn.ai.conv
-				}})
-			})
-			if (IconButton{Icon: icons.Close, Label: m.ClosePane(), Size: Tiny, Danger: true}).Clicked(c, "close") {
-				a.closeSoon(cn.id)
-			}
+				cn.ai.drop = cn.ai.conv
+			}}}
 		})
 		if row.Clicked() {
 			t.Focus = n.ID
@@ -116,13 +98,11 @@ const (
 
 // Widths of an AI pane: from aiFullWidth its composer's choices all show
 // their labels, from aiShortWidth the model's; under aiHeadWidth its
-// header shows the backend as an icon, under aiHeadMenuWidth its split
-// buttons go into its menu.
+// header shows the backend as an icon.
 const (
-	aiFullWidth     = 472
-	aiShortWidth    = 342
-	aiHeadWidth     = 420
-	aiHeadMenuWidth = 360
+	aiFullWidth  = 472
+	aiShortWidth = 342
+	aiHeadWidth  = 420
 )
 
 // composerFit is how much of the composer's controls show in a pane w
@@ -482,10 +462,11 @@ func (a *App) modeChip(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Mess
 
 // aiTimeline is the conversation, which follows its end as it grows
 // unless the user scrolled up from it; before the first question, a word
-// on what the pane does.
+// on what the pane does, centered while it fits and scrolling, never over
+// the composer, in a short pane.
 func (a *App) aiTimeline(c *ui.Context, cn *conn, tok theme.Tokens, m locales.Messages) {
 	if len(cn.ai.items) == 0 && !cn.ai.running {
-		ui.Column(c.Key("aiempty")).Grow(1).FillWidth().Padding(theme.Space(6)).Gap(theme.Space(2)).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+		ui.Scroll(c.Key("aiempty")).Grow(1).FillWidth().Padding(theme.Space(6)).Gap(theme.Space(2)).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 			softTile(c, icons.Robot, tok.Accent, 44).Margin(0, 0, theme.Space(1), 0)
 			ui.Text(c, m.AiEmptyTitle(a.pv(cn.host.Label()))).FontSize(theme.Title3).FontWeight(600).TextAlign(ui.Center).MaxWidth(320)
 			empty := m.AiEmpty()
@@ -897,6 +878,9 @@ func toolOutput(m locales.Messages, s string) string {
 	if s == "remote tools are not connected yet" {
 		return m.AiToolsPending()
 	}
+	if text, ok := auditText(m, s); ok {
+		return text
+	}
 	first, rest, multiline := strings.Cut(s, "\n")
 	if first == "ai.command_output_limit" {
 		text := m.AiCommandOutputLimit()
@@ -908,7 +892,21 @@ func toolOutput(m locales.Messages, s string) string {
 	return securityText(m, s)
 }
 
+// auditText is a policy.AuditNotice code in the user's language.
+func auditText(m locales.Messages, s string) (string, bool) {
+	if reason, ok := strings.CutPrefix(s, "audit-unavailable:"); ok {
+		return m.AiAuditUnavailable(reason), true
+	}
+	if reason, ok := strings.CutPrefix(s, "audit-failed:"); ok {
+		return m.AiAuditRecordFailed(reason), true
+	}
+	return "", false
+}
+
 func aiErrLine(m locales.Messages, s string) string {
+	if text, ok := auditText(m, s); ok {
+		return text
+	}
 	if rest, ok := strings.CutPrefix(s, "http:"); ok {
 		status, detail, _ := strings.Cut(rest, ":")
 		if detail != "" {

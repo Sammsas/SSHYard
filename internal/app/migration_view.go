@@ -13,7 +13,7 @@ import (
 
 func (a *App) migrationSection(c *ui.Context, m locales.Messages, tok theme.Tokens) {
 	ui.Text(c, m.MigrationReadOnly()).FontSize(theme.Footnote).TextColor(tok.TextMuted)
-	a.settingsSection(c, tok, icons.Import, tok.Accent, m.MigrationGeneral(), func(g *settingsGroup) {
+	a.settingsSection(c, tok, icons.Import, m.MigrationGeneral(), func(g *settingsGroup) {
 		g.row("OpenSSH", m.MigrationFormat("~/.ssh/config"), func() {
 			if (IconButton{Icon: icons.Import, Label: m.ImportSSHConfig()}).Clicked(c, "migration:openssh") {
 				a.OpenImport(m, "")
@@ -30,6 +30,11 @@ func (a *App) migrationSection(c *ui.Context, m locales.Messages, tok theme.Toke
 				a.readMigration(m, migration.Text, false)
 			}
 		})
+		g.row(m.MigrationCSV(), m.MigrationFormat("host,port,user,password,title"), func() {
+			if a.p.PickFiles != nil && (IconButton{Icon: icons.OpenFile, Label: m.MigrationCSVChooseFile()}).Clicked(c, "migration:csv:file") {
+				a.readMigration(m, migration.CSV, false)
+			}
+		})
 	})
 	sources := migration.Sources()
 	groups := []struct {
@@ -38,7 +43,7 @@ func (a *App) migrationSection(c *ui.Context, m locales.Messages, tok theme.Toke
 	}{{m.MigrationCommon(), 0, 3}, {m.MigrationCrossPlatform(), 3, 7}, {m.MigrationOther(), 7, 10}}
 	formats := []string{".xsh", ".mxtsessions / .ini", ".reg / ~/.putty/sessions/", "user.sessions / .json", ".json", ".yaml / .yml", ".json / .csv", ".remmina", ".xml / .csv", ".ini"}
 	for _, group := range groups {
-		a.settingsSection(c, tok, icons.Import, tok.Accent, group.title, func(g *settingsGroup) {
+		a.settingsSection(c, tok, icons.Import, group.title, func(g *settingsGroup) {
 			for i := group.start; i < group.end; i++ {
 				source := sources[i]
 				g.row(string(source), m.MigrationFormat(formats[i]), func() {
@@ -61,8 +66,11 @@ func (a *App) migrationView(c *ui.Context, m locales.Messages) {
 	tok := currentTokens(c)
 	width, height := c.Size()
 	source := string(f.source)
-	if f.editable() {
+	switch f.source {
+	case migration.Text:
 		source = m.MigrationText()
+	case migration.CSV:
+		source = m.MigrationCSV()
 	}
 	previewing := !f.reading && !f.saving && !f.composing && f.done == nil
 	var k migrationCheck
@@ -140,6 +148,19 @@ func (a *App) migrationView(c *ui.Context, m locales.Messages) {
 func (a *App) migrationPreview(c *ui.Context, m locales.Messages, tok theme.Tokens, f *migrationForm, k migrationCheck, height float32) {
 	if !f.editable() {
 		ui.Text(c, m.MigrationReadOnly()).FontSize(theme.Footnote).TextColor(tok.TextMuted)
+	}
+	if f.encoding != "" {
+		ui.Row(c).Gap(theme.Space(2)).AlignItems(ui.Center).FillWidth().Children(func() {
+			ui.Text(c, m.MigrationEncodingNote(string(f.encoding))).FontSize(theme.Footnote).TextColor(tok.TextMuted).Grow(1).Shrink(1)
+			choice := string(f.encoding)
+			var options []string
+			for _, e := range migration.Encodings() {
+				options = append(options, string(e))
+			}
+			if formSelect(c.Key("migration:encoding"), &choice, options).Label(m.MigrationEncoding()).Changed() {
+				a.rereadMigration(m, migration.Encoding(choice))
+			}
+		})
 	}
 	ui.Row(c).Gap(theme.Space(2)).AlignItems(ui.Center).FillWidth().Children(func() {
 		in := formTextInput(c.Key("migration:search"), &f.search).Label(m.SearchHosts()).Placeholder(m.SearchHosts()).AutoFocus().Grow(1).Shrink(1).MinWidth(0)

@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -153,7 +154,10 @@ type migrationRowError struct {
 
 func (e *migrationRowError) Error() string { return e.text }
 
-func migrationAuth(m locales.Messages, h assets.Host, r *migrationRow) (assets.Host, []keychain.Change, error) {
+// migrationAuth is how h logs in as r says, and the secrets it saves. A
+// PuTTY key whose passphrase derivation costs more than usual is a
+// *keys.CostError unless costly, the user having agreed.
+func migrationAuth(m locales.Messages, h assets.Host, r *migrationRow, costly bool) (assets.Host, []keychain.Change, error) {
 	e := r.entry
 	var changes []keychain.Change
 	rowError := func(err error) error {
@@ -192,9 +196,16 @@ func migrationAuth(m locales.Messages, h assets.Host, r *migrationRow) (assets.H
 		if r.pass != "" {
 			pass = []byte(r.pass)
 		}
-		k, err := keys.Import(data, pass)
+		load := importPlainKey
+		if costly {
+			load = importCostlyKey
+		}
+		k, err := load(data, pass)
 		if errors.Is(err, keys.ErrPassphraseNeeded) && len(k.PEM) > 0 {
 			err = nil
+		}
+		if errors.Is(err, keys.ErrCostly) {
+			return h, nil, err // the batch asks, and runs again
 		}
 		if err != nil {
 			return h, nil, rowError(err)
@@ -234,7 +245,7 @@ func (a *App) saveMigration(m locales.Messages, f *migrationForm) (int, error) {
 			}
 			for i, h := range snap.Hosts {
 				if h.ID == id {
-					updated, batch, err := migrationAuth(m, h, r)
+					updated, batch, err := migrationAuth(m, h, r, f.costly)
 					if err != nil {
 						return 0, err
 					}
@@ -296,6 +307,10 @@ func migrationIssue(m locales.Messages, issue migration.Issue) string {
 		text = m.MigrationEncryptedSecret()
 	case "invalid-entry":
 		text = m.MigrationInvalidEntry()
+	case "damaged-entry":
+		text = m.MigrationDamagedEntry()
+	case "default-user":
+		text = m.MigrationDefaultUser()
 	case "missing-reference":
 		text = m.MigrationDependency()
 	case "duplicate-id":
@@ -323,6 +338,9 @@ func migrationIssue(m locales.Messages, issue migration.Issue) string {
 	}
 	if label != "" {
 		text += " · " + label
+	}
+	if issue.Line > 0 {
+		text += " · " + m.MigrationLine(strconv.Itoa(issue.Line))
 	}
 	return text
 }

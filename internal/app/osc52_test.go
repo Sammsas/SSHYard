@@ -481,11 +481,33 @@ func TestOSC52Pause(t *testing.T) {
 	}
 }
 
+func TestOSC52WriteQuiet(t *testing.T) {
+	a, tt := newTestApp(t)
+	s := a.Settings()
+	s.OSC52Write, s.OSC52Notify = settings.OSC52Allow, false
+	if err := a.ApplySettings(s); err != nil {
+		t.Fatal(err)
+	}
+	c := connectOSC(t, a, "box")
+	tt.SetClipboard("OLD")
+	writeOSC(t, c, "PAYLOAD-q")
+	tt.Frame()
+	if tt.Clipboard() != "PAYLOAD-q" {
+		t.Fatalf("clipboard %q", tt.Clipboard())
+	}
+	if tt.HasText("wrote to the clipboard") || tt.HasText("Undo") {
+		t.Fatalf("notice shown: %q", tt.Texts())
+	}
+	if _, _, ok := a.clip.takeUndo(c.id); ok {
+		t.Fatal("kept an undo snapshot without a notice")
+	}
+}
+
 func TestOSC52Settings(t *testing.T) {
 	a, tt := newTestApp(t)
-	tt.SetSize(1200, 2600)
 	a.openSettings(prefTerminal)
 	tt.Frame()
+	scrollToSetting(t, tt, "Deny")
 	mustClick(t, tt, "Deny")
 	if a.Settings().OSC52Write != settings.OSC52Deny {
 		t.Fatalf("policy %q", a.Settings().OSC52Write)

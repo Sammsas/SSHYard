@@ -68,6 +68,9 @@ type Server struct {
 	SFTPRoot string
 	// NoSFTP refuses the sftp subsystem, as a server without one.
 	NoSFTP bool
+	// SFTPExit, when set, takes the sftp subsystem and ends it at once
+	// with that status, as a server whose sftp-server is missing (127).
+	SFTPExit int
 	// SFTPHandlers, when set, serves the sftp subsystem instead, with
 	// handlers it makes for each session (a fake or hostile server).
 	SFTPHandlers func() sftp.Handlers
@@ -81,6 +84,7 @@ type Server struct {
 
 	ln       net.Listener
 	mu       sync.Mutex
+	kbd      func(m ssh.ConnMetadata, client ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error)
 	conns    map[net.Conn]bool
 	logins   atomic.Int32
 	lastPTY  PTY
@@ -88,6 +92,14 @@ type Server struct {
 	closed   atomic.Bool
 	resizeCh chan PTY
 	tunnels  atomic.Int32
+}
+
+// SetKeyboardInteractive logs in by keyboard-interactive questions with
+// fn, as a server asking a one-time password does.
+func (s *Server) SetKeyboardInteractive(fn func(m ssh.ConnMetadata, client ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error)) {
+	s.mu.Lock()
+	s.kbd = fn
+	s.mu.Unlock()
 }
 
 // Tunnels counts the direct-tcpip channels opened so far.
@@ -180,6 +192,9 @@ func (s *Server) config() *ssh.ServerConfig {
 		},
 		ServerVersion: "SSH-2.0-SSHYardTest",
 	}
+	s.mu.Lock()
+	cfg.KeyboardInteractiveCallback = s.kbd
+	s.mu.Unlock()
 	cfg.AddHostKey(s.HostKey)
 	return cfg
 }
@@ -355,6 +370,12 @@ func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 				continue
 			}
 			r.Reply(true, nil)
+			if s.SFTPExit != 0 {
+				io.WriteString(ch.Stderr(), "sh: /usr/libexec/sftp-server: not found\n")
+				ch.SendRequest("exit-status", false, ssh.Marshal(struct{ C uint32 }{uint32(s.SFTPExit)}))
+				ch.Close()
+				continue
+			}
 			if s.SFTPHandlers != nil {
 				var rw io.ReadWriteCloser = ch
 				if s.SFTPConn != nil {

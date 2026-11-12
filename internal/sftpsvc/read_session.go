@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	"golang.org/x/crypto/ssh"
@@ -81,6 +82,9 @@ func (c *Client) negotiateOperation(ctx context.Context) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if c.sudo != nil {
+		return c.sudoOperation(ctx)
+	}
 	if withoutSFTP(c.conn) {
 		return c.scpOperation()
 	}
@@ -115,10 +119,20 @@ func (c *Client) negotiateOperation(ctx context.Context) (*Client, error) {
 	}
 	sc, err := sftp.NewClientPipe(rd, wr)
 	if err != nil {
+		if ctx.Err() == nil && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+			// The server took the subsystem but ended it unanswered, as
+			// dropbear or OpenSSH does whose sftp-server is missing: its
+			// shell and scp stand in, if it runs commands.
+			session.Close()
+			if sub, scpErr := c.scpOperation(); scpErr == nil {
+				markWithoutSFTP(c.conn)
+				return sub, nil
+			}
+		}
 		return nil, err
 	}
 	complete = true
-	return &Client{c: sc, conn: c.conn, operation: session, operations: c.operations}, nil
+	return opened(&Client{c: sc, conn: c.conn, operation: session, operations: c.operations}), nil
 }
 
 // errSubsystem is what x/crypto/ssh says when the server refuses a
@@ -158,5 +172,5 @@ func (c *Client) scpOperation() (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sftp: no SFTP, and %w", err)
 	}
-	return &Client{c: sc, conn: c.conn, operations: c.operations, scp: true}, nil
+	return opened(&Client{c: sc, conn: c.conn, operations: c.operations, scp: true}), nil
 }

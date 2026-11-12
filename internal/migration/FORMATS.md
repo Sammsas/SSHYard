@@ -8,6 +8,15 @@ in memory and are excluded from JSON/YAML serialization.
 SSH entries and 10,000 diagnostics; a file error rejects the batch; non-SSH rows and unsupported options
 produce machine-readable diagnostics; unknown or damaged schemas fail explicitly.
 A directory contributes only its relative subdirectory path to group names.
+A malformed INI line fails its file with the file name and line number.
+
+Exports of Xshell, MobaXterm, PuTTY, Remmina, mRemoteNG and WinSCP that are
+neither UTF-8 nor UTF-16 with a byte order mark are in a legacy code page: the
+one chosen in the preview, else the first that decodes them cleanly among the
+Windows ANSI code page, the interface language's (GB18030, Big5, Shift_JIS,
+EUC-KR, else Windows-1252) and then those in that order. A MobaXterm bookmark
+that cannot be read is skipped with its line number while the others import,
+and `<default>` users take `DefaultLoginName` from the same file.
 `ParseText` keeps the same size, entry and diagnostic bounds for typed text.
 
 ## Text host list
@@ -23,6 +32,17 @@ quote is diagnosed. Blank lines, `#` comments and lines without a field, such
 as separators, are skipped. The preview edits every field and the login of each
 row, alone or for the selected rows at once, and saves only once every
 selected row is valid.
+
+## CSV host table
+
+`CSV` reads a selected `.csv` file whose header row names the columns with the
+text host list's keys, under the same rules: one host per row, each cell a
+`key=value` field under its column name, a blank cell as no field, other columns
+diagnosed only where a row fills them. Columns split on commas, or on semicolons
+or tabs when the header has no comma; quoting follows CSV, a stray quote stays
+literal, and cells other than `password` are trimmed. Rows without a value and
+`#` comments are skipped; a header without a `host` or `ip` column fails as an
+unsupported format. The preview is the text import's.
 
 ## Independently verified source formats
 

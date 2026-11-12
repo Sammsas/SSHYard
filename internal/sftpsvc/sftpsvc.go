@@ -65,6 +65,18 @@ type Client struct {
 	// scp is set when the server has no SFTP and its shell and scp
 	// stand in (scpfs).
 	scp bool
+	// sudo is set when each channel runs the SFTP server through sudo.
+	sudo *sudoAuth
+	// closed ends when the Client closes, and with it the channels of
+	// the transfers it opened (Transfers).
+	closed     context.Context
+	markClosed context.CancelFunc
+}
+
+// opened readies a Client whose channel was just opened.
+func opened(c *Client) *Client {
+	c.closed, c.markClosed = context.WithCancel(context.Background())
+	return c
 }
 
 // SCP reports a server without SFTP, whose files move with scp.
@@ -89,6 +101,9 @@ func NewContext(ctx context.Context, conn *ssh.Client) (*Client, error) {
 
 // Close ends the SFTP session.
 func (c *Client) Close() error {
+	if c.markClosed != nil {
+		c.markClosed()
+	}
 	if c.operation != nil {
 		c.operation.Close()
 	}

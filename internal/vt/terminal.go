@@ -2,6 +2,7 @@ package vt
 
 import (
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding"
@@ -96,9 +97,8 @@ type Terminal struct {
 	nextSub  bool
 	hasParam bool
 	osc      []byte
-	osc52    bool // this OSC started with "52;"
-	oscDrop  bool // OSC 52 over the limit: swallow, keep nothing
-	oscPd    int  // base64 digits of the OSC 52 payload, -1 until it starts
+	osc52    bool      // this OSC started with "52;"
+	oscScan  osc52Scan // its body; once dropped, swallow and keep nothing
 	escInter byte
 	utf8buf  []byte
 
@@ -116,7 +116,9 @@ type Terminal struct {
 	dcsTooBig  bool // the swallowed OSC 52 was over the limit
 	dcsChecked bool
 	dcsIs52    bool
-	dcsPd      int // base64 digits of a passed-through OSC 52, -1 until it starts
+	dcsScan    osc52Scan // the body of a passed-through OSC 52
+	dcsEnded   bool      // that OSC 52 has ended (BEL or ESC)
+	dcsTail    int       // bytes kept after it ended
 
 	// Reply, when set, receives what the terminal answers the program
 	// (device status and attributes reports). It is called with the lock
@@ -138,6 +140,10 @@ type Terminal struct {
 
 	// osc52Max is the largest decoded OSC 52, or 0 for the default.
 	osc52Max int
+
+	// now is the clock lines are stamped with (Line.Time), nil for the
+	// system's.
+	now func() time.Time
 
 	gen uint64
 }
@@ -164,7 +170,7 @@ func (t *Terminal) reset() {
 	t.g0Graphics, t.g1Graphics, t.shiftOut = false, false, false
 	t.resetTabs()
 	t.onlyOSC = false
-	t.osc52, t.oscDrop = false, false
+	t.osc52, t.oscScan = false, osc52Scan{}
 	t.resetDCS()
 	t.state = sGround
 }
@@ -396,6 +402,7 @@ func reflow(old []Line, cols, top, y, x int, pending bool) (out []Line, ntop, ny
 			continue
 		}
 		var cells []Cell
+		tm := old[i].Time
 		for k := i; k <= j; k++ {
 			cs := old[k].Cells
 			if k == y {
@@ -414,7 +421,7 @@ func reflow(old []Line, cols, top, y, x int, pending bool) (out []Line, ntop, ny
 		for len(cells) < n {
 			cells = append(cells, blank(Cell{}))
 		}
-		line := Line{Cells: make([]Cell, 0, cols)}
+		line := Line{Cells: make([]Cell, 0, cols), Time: tm}
 		for k := 0; k < n; {
 			w := 1
 			if cells[k].Width == 2 && k+1 < n && cells[k+1].Width == 0 {
@@ -437,7 +444,7 @@ func reflow(old []Line, cols, top, y, x int, pending bool) (out []Line, ntop, ny
 				}
 				line.Wrapped = true
 				out = append(out, line)
-				line = Line{Cells: make([]Cell, 0, cols)}
+				line = Line{Cells: make([]Cell, 0, cols), Time: tm}
 			}
 			if cur >= k && cur < k+w {
 				ny, nx = len(out), len(line.Cells)+min(cur-k, len(c)-1)
@@ -553,6 +560,19 @@ func (t *Terminal) CursorLine() string {
 	return t.primary.lines[t.cur.y].text(true)
 }
 
+// stamp notes when output first reaches the cursor's line.
+func (t *Terminal) stamp() {
+	l := &t.lines()[t.cur.y]
+	if l.Time != 0 {
+		return
+	}
+	now := time.Now
+	if t.now != nil {
+		now = t.now
+	}
+	l.Time = now().Unix()
+}
+
 // leaveLine tells the line hook of the cursor's line, as the cursor
 // leaves it.
 func (t *Terminal) leaveLine() {
@@ -595,7 +615,9 @@ func (t *Terminal) rune(r rune) {
 	case sCSIDrop:
 		// An oversized CSI stays discarded even across UTF-8 input.
 	case sOSC:
-		t.osc = utf8.AppendRune(t.osc, r)
+		for _, b := range utf8.AppendRune(nil, r) {
+			t.oscPush(b)
+		}
 	default:
 		// Not part of any sequence: abort it and print.
 		t.state = sGround
@@ -755,8 +777,7 @@ func (t *Terminal) escape(b byte) {
 	case ']':
 		t.state = sOSC
 		t.osc = t.osc[:0]
-		t.osc52, t.oscDrop = false, false
-		t.oscPd = -1
+		t.osc52, t.oscScan = false, osc52Scan{}
 	case 'P':
 		t.resetDCS()
 		t.state = sDCS

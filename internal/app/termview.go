@@ -1,11 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,6 +17,7 @@ import (
 	"github.com/Licoy/sshyard/internal/settings"
 	"github.com/Licoy/sshyard/internal/theme"
 	"github.com/Licoy/sshyard/internal/vt"
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -34,6 +37,17 @@ type ptyTarget interface {
 
 const termPad = 10 // DIPs around the grid, inside the pane card
 
+// A selection drag scrolls the view taken past the grid's top or bottom:
+// slowest at the edge, and dragScrollRamp rows past it as fast as
+// dragScrollFast lines a second.
+const (
+	dragScrollRamp = 3                      // rows past the edge at the fastest
+	dragScrollSlow = 4                      // lines a second at the edge
+	dragScrollFast = 30                     // lines a second dragScrollRamp rows past it
+	dragScrollRate = 60                     // frames a second while it scrolls
+	dragScrollStep = 100 * time.Millisecond // the most a late frame scrolls
+)
+
 type termView struct {
 	target         ptyTarget
 	snippetSending bool // UI-thread state, cleared when the captured write returns
@@ -44,6 +58,9 @@ type termView struct {
 	// set then too, takes a paste to send once asked, when it reports so.
 	fanout    func(encode func(vt.Modes) []byte)
 	holdPaste func(text string) bool
+	// local is a terminal on this computer, whose programs can read its
+	// clipboard themselves (see pasteClipboard).
+	local bool
 	// shortcuts are the shortcuts recorded (settings.Shortcuts), whose
 	// keys the terminal leaves to the app
 	shortcuts map[string]string
@@ -59,6 +76,12 @@ type termView struct {
 	// under the pointer while they are held, underlined.
 	openLink func(string)
 	link     linkSpan
+	// zoomFont makes the terminals' font n points larger (smaller when n
+	// is negative), as the wheel turns with fontMods held or a touchpad
+	// pinches; zoomAcc and pinchAcc are a touchpad's scroll and pinch on
+	// their way to the next point.
+	zoomFont          func(n int)
+	zoomAcc, pinchAcc float32
 	// clear leaves the background to the pane's translucent fill, for a
 	// content area on the window's material (settings.ContentMaterial)
 	clear bool
@@ -67,6 +90,10 @@ type termView struct {
 	// hlFullScreen those of a full-screen program.
 	hl                       *highlight.Highlighter
 	hlOverride, hlFullScreen bool
+	// lineNumbers and timestamps show, in a gutter left of the grid,
+	// each line's number and the time output reached it
+	// (settings.TerminalLineNumbers, TerminalTimestamps).
+	lineNumbers, timestamps bool
 
 	// font
 	fontSize            float32
@@ -87,8 +114,19 @@ type termView struct {
 	w, h                float32 // the element's size last drawn
 	selA, selB          vt.Pos
 	selecting, selected bool
-	preedit             string
-	swallow             bool
+	// a selection drag taken past the grid's top or bottom scrolls the
+	// view: dragScroll is where (-1 back, 1 forward), dragX the
+	// pointer's column, dragOver how far past the edge it is, and
+	// dragAt and dragAcc the clock and the lines of the scroll on its way
+	dragScroll      int
+	dragX, dragOver float32
+	dragAt          time.Time
+	dragAcc         float32
+	preedit         string
+	swallow         bool
+	// altClick is a plain left click with ⌥ (Alt elsewhere) being held:
+	// let go where it was pressed, it moves the shell's cursor there.
+	altClick bool
 
 	// mouse reports
 	held      bool // a button press was reported, its release not yet
@@ -109,6 +147,7 @@ type termView struct {
 	colOf  []int
 	placed []ui.Glyph
 	marks  []uint8 // the matches on a row, as rowMatches marks them
+	label  []byte  // a gutter label being written
 
 	// find
 	query      string
@@ -190,10 +229,50 @@ func (v *termView) gridSize(w, h float32) (int, int) {
 	if v.cellW == 0 {
 		return 80, 24
 	}
-	cols := int((w - 2*termPad) / v.cellW)
+	cols := int((w - 2*termPad - v.gutterW()) / v.cellW)
 	rows := int((h - 2*termPad) / v.cellH)
 	return max(cols, 2), max(rows, 1)
 }
+
+// gutterDigits is the least room line numbers take, so that the grid
+// does not narrow, and the program get a resize, each time they grow.
+const gutterDigits = 5
+
+// timeLayout is how the gutter shows the time output reached a line.
+const timeLayout = "15:04:05"
+
+// gutterCells is how many cells the gutter left of the grid takes: the
+// time and the line number, and a cell each side of the line between it
+// and the grid; 0 when it shows neither.
+func (v *termView) gutterCells() int {
+	n := 0
+	if v.timestamps {
+		n += len(timeLayout)
+	}
+	if v.lineNumbers {
+		if n > 0 {
+			n++
+		}
+		n += v.numberCells()
+	}
+	if n > 0 {
+		n += 2
+	}
+	return n
+}
+
+// numberCells is how many cells the line numbers take: room for the
+// newest line's, as last drawn.
+func (v *termView) numberCells() int {
+	n, d := v.snap.First+v.snap.Offset+v.snap.Rows, 1
+	for ; n >= 10; n /= 10 {
+		d++
+	}
+	return max(d, gutterDigits)
+}
+
+// gutterW is the gutter's width in DIPs.
+func (v *termView) gutterW() float32 { return float32(v.gutterCells()) * v.cellW }
 
 // The scrollbar is drawn in the right padding: thin at rest, wide under
 // the pointer, and its thumb never shorter than barMinThumb.
@@ -251,11 +330,90 @@ func (v *termView) cellAt(x, y float32) vt.Pos {
 	if v.cellW == 0 {
 		return vt.Pos{Line: v.first}
 	}
-	col := int(math.Floor(float64((x - termPad) / v.cellW)))
 	row := int(math.Floor(float64((y - termPad) / v.cellH)))
-	col = max(0, min(col, v.cols-1))
 	row = max(0, min(row, v.rows-1))
-	return vt.Pos{Line: v.first + row, Col: col}
+	return vt.Pos{Line: v.first + row, Col: v.colAt(x)}
+}
+
+// colAt is the column at x in the element's box, within the grid's.
+func (v *termView) colAt(x float32) int {
+	if v.cellW == 0 {
+		return 0
+	}
+	col := int(math.Floor(float64((x - termPad - v.gutterW()) / v.cellW)))
+	return max(0, min(col, v.cols-1))
+}
+
+// dragScrollAt is where a selection drag at y scrolls the view: -1 above
+// the grid's top, 1 below its bottom, 0 on it, its first and last rows
+// whole, so that a click on them that wobbles stays a click; over is how
+// far past that edge it is in DIPs.
+func (v *termView) dragScrollAt(y float32) (dir int, over float32) {
+	if v.cellW == 0 || v.rows <= 0 {
+		return 0, 0
+	}
+	top := float32(termPad)
+	bottom := termPad + float32(v.rows)*v.cellH
+	switch {
+	case y < top:
+		return -1, top - y
+	case y > bottom:
+		return 1, y - bottom
+	}
+	return 0, 0
+}
+
+// dragRate is the lines a second a selection drag past the edge scrolls
+// the view: slowest at it, fastest dragScrollRamp rows past.
+func (v *termView) dragRate() float32 {
+	if v.cellH <= 0 || v.rows <= 0 {
+		return dragScrollSlow
+	}
+	f := min(v.dragOver/(dragScrollRamp*v.cellH), 1)
+	return dragScrollSlow + (dragScrollFast-dragScrollSlow)*f
+}
+
+// autoScroll moves the view on as a selection drag held past its edge
+// scrolls it, at the painter's clock.
+func (v *termView) autoScroll(p *ui.Painter) {
+	if !v.selecting || v.dragScroll == 0 {
+		return
+	}
+	now := p.Now()
+	if v.dragAt.IsZero() {
+		v.dragAt = now
+	}
+	// A frame long after the last, as after the window was hid, scrolls no
+	// further than dragScrollStep does; one painted at a refresh before the
+	// event that started it, none.
+	dt := max(min(now.Sub(v.dragAt), dragScrollStep), 0)
+	v.dragAt = now
+	v.dragAcc += float32(dt.Seconds()) * v.dragRate()
+	if n := int(v.dragAcc); n > 0 {
+		v.dragAcc -= float32(n)
+		v.offset = max(v.offset-v.dragScroll*n, 0)
+	}
+}
+
+// dragScrolls reports whether the view s shows can still scroll the way a
+// selection drag scrolls it: not past the live screen, the scrollback's
+// first line, nor on the alternate screen, which has none.
+func (v *termView) dragScrolls(s *vt.Snapshot) bool {
+	if v.dragScroll > 0 {
+		return s.Offset > 0
+	}
+	return s.Offset < s.Scrollback
+}
+
+// dragExtend puts the end of a selection drag at the row the view scrolled
+// past, at the pointer's column.
+func (v *termView) dragExtend() {
+	line := v.first
+	if v.dragScroll > 0 {
+		line = v.first + v.rows - 1
+	}
+	v.selB = vt.Pos{Line: line, Col: v.colAt(v.dragX)}
+	v.selected = v.selA != v.selB || v.selected
 }
 
 func (v *termView) shape(text string, bold, italic bool) []ui.Glyph {
@@ -396,30 +554,47 @@ func (v *termView) rowMatches(line, cols int) []uint8 {
 // composition.
 func (v *termView) paint(p *ui.Painter, r ui.Rect, pal *theme.Terminal, focused bool) {
 	v.metrics(p.Scale())
+	gutter := v.gutterCells()
 	cols, rows := v.gridSize(r.W, r.H)
 	if !v.sized || cols != v.cols || rows != v.rows {
 		if v.sized && cols != v.cols {
 			// The lines are reflowed: the selection's are not where it was.
 			v.selected, v.selecting = false, false
+			v.dragScroll = 0
 		}
 		v.cols, v.rows, v.sized = cols, rows, true
 		v.target.Resize(cols, rows)
 	}
 	t := v.target.Terminal()
+	v.autoScroll(p)
 	t.SnapshotInto(&v.snap, v.offset)
 	snap := &v.snap
 	if v.hl != nil && (v.hlFullScreen || !snap.Modes.AltScreen) {
 		v.hl.Apply(snap.Lines, v.hlOverride)
 	}
 	v.offset, v.first = snap.Offset, snap.First
+	if v.selecting && v.dragScroll != 0 {
+		v.dragExtend()
+		// The frames that move it, while it can move: none held at the
+		// live screen or the scrollback's top.
+		if v.dragScrolls(snap) {
+			p.AnimationFrameRate(dragScrollRate)
+		} else {
+			v.dragAt = time.Time{}
+		}
+	}
 	v.w, v.h = r.W, r.H
 	if !v.clear {
 		p.Fill(r, pal.Background, 0)
 	}
 	s := v.scale
-	ox := float32(math.Round(float64((r.X+termPad)*s))) / s
+	gx := float32(math.Round(float64((r.X+termPad)*s))) / s
+	ox := float32(math.Round(float64((r.X+termPad+float32(gutter)*v.cellW)*s))) / s
 	oy := float32(math.Round(float64((r.Y+termPad)*s))) / s
 	cw, ch := v.cellW, v.cellH
+	if gutter > 0 {
+		v.paintGutter(p, r, snap, gx, oy, gutter, pal)
+	}
 
 	for y, line := range snap.Lines {
 		ry := oy + float32(y)*ch
@@ -578,6 +753,47 @@ func (v *termView) paint(p *ui.Painter, r ui.Rect, pal *theme.Terminal, focused 
 	}
 }
 
+// paintGutter draws, left of each row of the grid, the time output
+// reached it and its line number, in cells columns from x, and a line
+// between them and the grid. A row output never reached has neither,
+// unless it is above the cursor: those are numbered.
+func (v *termView) paintGutter(p *ui.Painter, r ui.Rect, snap *vt.Snapshot, x, y float32, cells int, pal *theme.Terminal) {
+	cw, ch, s := v.cellW, v.cellH, v.scale
+	numAt := 0
+	if v.timestamps {
+		numAt = len(timeLayout) + 1
+	}
+	numEnd := cells - 2
+	cursor := snap.First + snap.CursorY
+	for row, line := range snap.Lines {
+		ry := y + float32(row)*ch + v.base
+		if v.timestamps && line.Time != 0 {
+			v.label = time.Unix(line.Time, 0).AppendFormat(v.label[:0], timeLayout)
+			v.gutterText(p, v.label, x, ry, pal.Foreground.Alpha(0.4))
+		}
+		if abs := snap.First + row; v.lineNumbers && (line.Time != 0 || abs <= cursor) {
+			v.label = strconv.AppendInt(v.label[:0], int64(abs+1), 10)
+			v.gutterText(p, v.label, x+float32(max(numEnd-len(v.label), numAt))*cw, ry, pal.Foreground.Alpha(0.55))
+		}
+	}
+	lx := float32(math.Round(float64((x+float32(cells-1)*cw)*s))) / s
+	p.Fill(ui.Rect{X: lx, Y: r.Y, W: max(1/s, 1), H: r.H}, pal.Foreground.Alpha(0.12), 0)
+}
+
+// gutterText draws text, ASCII, one character a cell from x, its
+// baseline at y.
+func (v *termView) gutterText(p *ui.Painter, text []byte, x, y float32, c ui.Color) {
+	placed := v.placed[:0]
+	for i := range text {
+		for _, g := range v.shapeBytes(text[i:i+1], 0) {
+			g.X = float32(i)*v.cellW + max((v.cellW-g.Advance)/2, 0)
+			placed = append(placed, g)
+		}
+	}
+	v.placed = placed
+	p.Glyphs(placed, x, y, c)
+}
+
 // placeGlyphs puts the glyphs g of a run of cells in their cells:
 // colOf is the column of each rune of the run. Each cluster is centered
 // in its cell(s), as monospace fallback fonts are often narrower or
@@ -610,7 +826,7 @@ func placeGlyphs(placed, g []ui.Glyph, colOf []int, cells []vt.Cell, cw float32)
 // method's window goes.
 func (v *termView) caret() ui.Rect {
 	x, y := v.target.Terminal().Cursor(v.offset)
-	return ui.Rect{X: termPad + float32(x)*v.cellW, Y: termPad + float32(y)*v.cellH, W: max(v.cellW, 1), H: max(v.cellH, 1)}
+	return ui.Rect{X: termPad + v.gutterW() + float32(x)*v.cellW, Y: termPad + float32(y)*v.cellH, W: max(v.cellW, 1), H: max(v.cellH, 1)}
 }
 
 func (v *termView) send(b []byte) {
@@ -620,6 +836,7 @@ func (v *termView) send(b []byte) {
 	v.blink.at = time.Time{}
 	v.offset = 0
 	v.selected = false
+	v.dragScroll = 0
 	if _, err := v.target.Write(b); errors.Is(err, session.ErrInputBusy) && v.inputError != nil {
 		v.inputError(errSnippetBusy)
 	}
@@ -645,6 +862,32 @@ func (v *termView) report(m vt.Modes, btn vt.MouseBtn, act vt.MouseAction, p vt.
 	if b := vt.EncodeMouse(m, ev); b != nil {
 		v.target.Write(b)
 	}
+}
+
+// moveCursorTo moves the shell's cursor to the cell p, as ⌥-click
+// (Alt-click elsewhere) does: the arrows that take it there along the
+// line it is on. Only on the main screen of a program that does not read
+// the mouse, and only within the cursor's line, lines that wrapped
+// counting as one; up and down would page through a shell's history.
+func (v *termView) moveCursorTo(p vt.Pos) {
+	snap := v.target.Terminal().Snapshot(0)
+	if snap.Modes.AltScreen || snap.Modes.Mouse != vt.MouseOff {
+		return
+	}
+	if steps, ok := snap.CursorSteps(p.Line-snap.First, p.Col); ok {
+		v.send(cursorMoveBytes(steps, snap.Modes))
+	}
+}
+
+// cursorMoveBytes are the arrows that move the cursor steps characters
+// right, left when negative, in the cursor key mode of m (DECCKM).
+func cursorMoveBytes(steps int, m vt.Modes) []byte {
+	k := ui.KeyRight
+	if steps < 0 {
+		k = ui.KeyLeft
+	}
+	b, _ := EncodeKey(k, 0, m)
+	return bytes.Repeat(b, abs(steps))
 }
 
 // focusChanged reports the focus coming to or leaving the pane to a
@@ -674,6 +917,28 @@ func (v *termView) Paste(text string) {
 		return
 	}
 	v.pasteNow(text)
+}
+
+// pasteClipboard pastes the clipboard's text. A local terminal given a
+// clipboard with an image and no text sends Ctrl+V instead, as the key
+// a program such as Codex CLI or Claude Code takes to read the image
+// from the system clipboard itself; it goes to this terminal alone. A
+// remote one has nothing to send: its programs cannot read this
+// computer's clipboard.
+func (v *termView) pasteClipboard(cb clipboard) {
+	text := cb.ReadClipboard()
+	if text == "" && v.local && clipboardHasImage(cb) {
+		v.send([]byte{0x16})
+		return
+	}
+	v.Paste(text)
+}
+
+// clipboardHasImage reports an image on the clipboard, which only a
+// clipboard that lists its formats (ui.Services) can tell.
+func clipboardHasImage(cb clipboard) bool {
+	f, ok := cb.(interface{ ClipboardFormats() []transfer.Format })
+	return ok && slices.Contains(f.ClipboardFormats(), transfer.PNG)
 }
 
 // pasteNow sends text as pasted, without holding it.
@@ -728,7 +993,7 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 				v.swallow = true
 				return true
 			case ui.KeyV:
-				v.Paste(cb.ReadClipboard())
+				v.pasteClipboard(cb)
 				v.swallow = true
 				return true
 			}
@@ -742,7 +1007,7 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 				v.offset = max(v.offset-max(v.rows-1, 1), 0)
 				return true
 			case ui.KeyInsert:
-				v.Paste(cb.ReadClipboard())
+				v.pasteClipboard(cb)
 				return true
 			}
 		}
@@ -815,7 +1080,7 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 			}
 			return true
 		case "paste", "pasteAndMatchStyle":
-			v.Paste(cb.ReadClipboard())
+			v.pasteClipboard(cb)
 			return true
 		case "selectAll":
 			snap := t.Snapshot(0)
@@ -852,10 +1117,11 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 			return v.rightPress(ev.Mods, cb)
 		}
 		if ev.Button == 2 {
-			v.Paste(cb.ReadClipboard())
+			v.pasteClipboard(cb)
 			return true
 		}
 		p := v.cellAt(ev.X, ev.Y)
+		v.altClick = ev.Button == 0 && ev.Clicks == 1 && ev.Mods&(ui.Alt|ui.Shift|ui.Ctrl|ui.Super) == ui.Alt
 		switch {
 		case ev.Clicks == 2:
 			v.selA, v.selB = t.WordAt(p)
@@ -870,6 +1136,7 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 			v.selected = false
 		}
 		v.selecting = true
+		v.dragScroll, v.dragAcc, v.dragAt = 0, 0, time.Time{}
 		return true
 	case ui.InputPointerMove:
 		if v.barDrag {
@@ -901,6 +1168,23 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 			}
 		}
 		if v.selecting && ev.Button == 0 {
+			v.dragX = ev.X
+			dir, over := v.dragScrollAt(ev.Y)
+			switch {
+			case dir != v.dragScroll:
+				v.dragScroll, v.dragOver = dir, over
+				v.dragAt, v.dragAcc = ev.Time, 0
+				if dir != 0 {
+					// A line at once, the frames after at its rate.
+					v.dragAcc = 1
+				}
+			case dir != 0:
+				v.dragOver = over
+			}
+			if v.dragScroll != 0 {
+				// The frame that scrolls puts the end on the row it goes by.
+				return true
+			}
 			p := v.cellAt(ev.X, ev.Y)
 			if p != v.selB || p != v.selA {
 				v.selB = p
@@ -924,6 +1208,11 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 		}
 		if v.selecting {
 			v.selecting = false
+			v.dragScroll, v.dragAcc, v.dragAt = 0, 0, time.Time{}
+			if v.altClick && !v.selected {
+				v.moveCursorTo(v.selA)
+			}
+			v.altClick = false
 			if v.copyOnSelect && v.selected {
 				if s := v.SelectedText(); s != "" {
 					cb.WriteClipboard(s)
@@ -935,6 +1224,10 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 	case ui.InputScroll:
 		if v.cellH == 0 {
 			return false
+		}
+		if ev.Mods&fontMods() != 0 && v.zoomFont != nil {
+			v.wheelFont(ev)
+			return true
 		}
 		if m := t.Modes(); v.reports(m, ev.Mods) {
 			// One report a notch, or three lines of a precise scroll.
@@ -987,8 +1280,50 @@ func (v *termView) input(ev ui.InputEvent, cb clipboard) bool {
 		}
 		v.offset = max(v.offset-lines, 0)
 		return true
+	case ui.InputZoom:
+		if v.zoomFont == nil || ev.Scale <= 0 {
+			return false
+		}
+		v.pinchAcc += float32(math.Log(float64(ev.Scale)))
+		if n := int(v.pinchAcc / fontPinchStep); n != 0 {
+			v.pinchAcc -= float32(n) * fontPinchStep
+			v.zoomFont(n)
+		}
+		return true
 	}
 	return false
+}
+
+// fontMods are the modifiers the wheel changes the terminal's font size
+// with: Ctrl, or ⌘ too on macOS.
+func fontMods() ui.Modifiers { return ui.Ctrl | linkMods() }
+
+// How far a touchpad scrolls (DIPs) or pinches (the log of its scale)
+// for the font to grow or shrink by a point.
+const (
+	fontScrollStep = 40
+	fontPinchStep  = 0.08
+)
+
+// wheelFont makes the font a point larger for each notch the wheel turns
+// up, smaller down, or for each fontScrollStep a touchpad scrolls.
+func (v *termView) wheelFont(ev ui.InputEvent) {
+	n := 0
+	switch {
+	case ev.Precise && ev.Momentum:
+		// The glide after the fingers leave would keep on changing it.
+	case ev.Precise:
+		v.zoomAcc -= ev.DY
+		n = int(v.zoomAcc / fontScrollStep)
+		v.zoomAcc -= float32(n) * fontScrollStep
+	case ev.DY < 0:
+		n = 1
+	case ev.DY > 0:
+		n = -1
+	}
+	if n != 0 {
+		v.zoomFont(n)
+	}
 }
 
 // linkSpan is the cells a link spans, when on.
@@ -1043,14 +1378,14 @@ func (v *termView) rightPress(mods ui.Modifiers, cb clipboard) bool {
 	}
 	switch v.rightClick {
 	case settings.RightClickPaste:
-		v.Paste(cb.ReadClipboard())
+		v.pasteClipboard(cb)
 		return true
 	case settings.RightClickCopyPaste:
 		if s := v.SelectedText(); v.selected && s != "" {
 			cb.WriteClipboard(s)
 			v.selected = false
 		} else {
-			v.Paste(cb.ReadClipboard())
+			v.pasteClipboard(cb)
 		}
 		return true
 	}

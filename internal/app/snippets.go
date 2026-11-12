@@ -59,16 +59,16 @@ func (a *App) snippetTarget() *conn {
 	return cn
 }
 
-// snippetsHead is what the snippets pane's header holds after its name:
-// how many there are and the button adding one.
-func (a *App) snippetsHead(c *ui.Context, m locales.Messages, tok theme.Tokens) {
-	if n := len(a.store.Snippets()); n > 0 {
-		ui.Text(c, strconv.Itoa(n)).FontSize(theme.Caption).TextColor(tok.TextMuted).SingleLine()
+// snippetsHead is what the snippets pane's header holds after its name,
+// how many there are, and its action, adding one.
+func (a *App) snippetsHead(c *ui.Context, m locales.Messages, tok theme.Tokens) (lead func(), acts []barAction) {
+	lead = func() {
+		if n := len(a.store.Snippets()); n > 0 {
+			ui.Text(c, strconv.Itoa(n)).FontSize(theme.Caption).TextColor(tok.TextMuted).SingleLine().Shrink(0)
+		}
 	}
-	ui.Spacer(c)
-	if (IconButton{Icon: icons.Add, Label: m.SnippetNew(), Size: Tiny}).Clicked(c, "snippet:new") {
-		a.openSnippet(m, assets.Snippet{Group: a.snippets.group}, false)
-	}
+	return lead, []barAction{{Key: "snippet:new", Button: IconButton{Icon: icons.Add, Label: m.SnippetNew(), Size: Tiny},
+		Do: func() { a.openSnippet(m, assets.Snippet{Group: a.snippets.group}, false) }}}
 }
 
 // snippetsPanel is the snippets pane under its header: the search and
@@ -167,12 +167,13 @@ func (a *App) snippetSearch(c *ui.Context, m locales.Messages, tok theme.Tokens)
 
 // searchField is a panel's search field, as the hosts' one: a magnifier,
 // the text and, while it holds any, an IconButton clearing it, as Escape
-// does.
-func searchField(c *ui.Context, m locales.Messages, tok theme.Tokens, key string, q *string, placeholder string) {
+// does. It returns the text's field.
+func searchField(c *ui.Context, m locales.Messages, tok theme.Tokens, key string, q *string, placeholder string) ui.Element {
+	var in ui.Element
 	ui.Row(c.Key(key)).FillWidth().Height(30).Padding(0, theme.Space(1), 0, theme.Space(2.5)).Gap(theme.Space(1.5)).AlignItems(ui.Center).
 		Radius(theme.RadiusControl).Background(tok.Fill).Children(func() {
 		ui.Icon(c, icons.Search.SVG).Size(14, 14).Shrink(0).TextColor(tok.TextMuted)
-		in := ui.TextInputBase(c.Key("q"), q).Placeholder(placeholder).Label(placeholder).Grow(1).Shrink(1).MinWidth(40)
+		in = ui.TextInputBase(c.Key("q"), q).Placeholder(placeholder).Label(placeholder).Grow(1).Shrink(1).MinWidth(40)
 		if *q != "" {
 			if (IconButton{Icon: icons.ClearText, Label: m.ClearSearch(), Size: Small}).Clicked(c, "clear") || in.Shortcut(0, ui.KeyEscape) {
 				*q = ""
@@ -183,6 +184,7 @@ func searchField(c *ui.Context, m locales.Messages, tok theme.Tokens, key string
 			ui.Box(c).Size(24, 24).Shrink(0)
 		}
 	})
+	return in
 }
 
 // snippetTab is a capsule choosing a group, or all of them, with how many

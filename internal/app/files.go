@@ -234,6 +234,9 @@ type remoteSide struct {
 	unfinished []sftpsvc.Unfinished
 	// fixing is a restore or discard under way.
 	fixing bool
+	// sudoHeld stops SFTP opening again on this connection after sudo
+	// failed (Host.SFTPSudo), until the user answers or retries.
+	sudoHeld bool
 }
 
 // localSide is the local half of a files pane.
@@ -412,7 +415,12 @@ func (a *App) transferClient(cn *conn) func(context.Context) (*sftpsvc.Client, e
 func (a *App) ensureSFTP(cn *conn) {
 	s := &cn.fs.remote
 	st := cn.s.Status()
-	if st.State != session.Connected || s.opening || (s.client != nil && s.connects == st.Connects) {
+	h := a.liveHost(cn.host)
+	sudo := h.SFTPSudo && h.SSH()
+	if st.State != session.Connected || s.opening || (s.client != nil && s.connects == st.Connects && s.client.Sudo() == sudo) {
+		return
+	}
+	if sudo && s.sudoHeld && s.client == nil && s.connects == st.Connects {
 		return
 	}
 	if s.client != nil {
@@ -428,7 +436,16 @@ func (a *App) ensureSFTP(cn *conn) {
 	connects := st.Connects
 	dir, start := s.dir, cn.host.RemoteDir
 	go func() {
-		c, err := sftpsvc.New(client)
+		var c *sftpsvc.Client
+		var err error
+		var pass string
+		var typed bool
+		if sudo {
+			pass, typed = a.sudoPassword(h)
+			c, err = sftpsvc.NewSudo(context.Background(), client, pass)
+		} else {
+			c, err = sftpsvc.New(client)
+		}
 		var home string
 		var es []sftpsvc.Entry
 		var un []sftpsvc.Unfinished
@@ -459,8 +476,12 @@ func (a *App) ensureSFTP(cn *conn) {
 					c.Close()
 				}
 				s.connects = connects
+				if errors.Is(err, sftpsvc.ErrSudo) || errors.Is(err, sftpsvc.ErrSudoPassword) {
+					a.sudoFailed(cn, h, err, pass != "", typed)
+				}
 				return
 			}
+			s.sudoHeld = false
 			s.client, s.connects, s.unfinished, s.home = c, connects, un, home
 			s.show(dir, es)
 			cn.fs.publish(c, connects)
@@ -871,8 +892,12 @@ func (a *App) fileTable(c *ui.Context, cn *conn, remote bool, m locales.Messages
 	}
 	extend := -1
 	sd.rows = sd.rows[:0]
-	// The rows are dense, in the Footnote size, so that a pane shows many.
-	ui.Themed(c.Key(key+":dense"), theme.Dense(*c.Theme())).Background(ui.Transparent).Grow(1).FillWidth().MinHeight(0).Children(func() {
+	// The rows are dense, in the Footnote size, so that a pane shows many,
+	// both as large as the files zoom says.
+	zoom := a.settings.FilesScale()
+	dense := theme.Dense(*c.Theme())
+	dense.FontSize, dense.Spacing = dense.FontSize*zoom, dense.Spacing*zoom
+	ui.Themed(c.Key(key+":dense"), dense).Background(ui.Transparent).Grow(1).FillWidth().MinHeight(0).Children(func() {
 		tb = ui.Table(c.Key(key), list, cols, len(es), func(row, col int) {
 			e := es[row]
 			on := sd.chosen.Has(e.Name)
@@ -884,7 +909,7 @@ func (a *App) fileTable(c *ui.Context, cn *conn, remote bool, m locales.Messages
 			case colName:
 				ui.Row(c).Grow(1).MinWidth(0).AlignItems(ui.Center).Children(func() {
 					name := ui.Row(c).Gap(6).Shrink(1).MinWidth(0).AlignItems(ui.Center).Children(func() {
-						fileImage(c, entryIcon(e), 14)
+						fileImage(c, entryIcon(e), 14*zoom)
 						ui.Text(c, e.Name).SingleLine().Shrink(1)
 					})
 					nb := name.Bounds()
@@ -1125,17 +1150,23 @@ func (a *App) fileKeys(c *ui.Context, cn *conn, remote bool, tb ui.Element, entr
 	}
 }
 
-// sideHeader is the title row of one side of a files pane: an icon, the
-// side's name and its IconButtons. The folder shows in the breadcrumbs
-// below.
-func sideHeader(c *ui.Context, tok theme.Tokens, ic *icons.Icon, title string, actions func()) {
-	ui.Row(c).Gap(6).Height(24).Padding(0, 2, 0, 4).AlignItems(ui.Center).Children(func() {
+// sideHeader is the title row of one side of a files pane, under key: an
+// icon, the side's name and its actions, as many as fit (actionBar). The
+// folder shows in the breadcrumbs below.
+func (a *App) sideHeader(c *ui.Context, key string, tok theme.Tokens, ic *icons.Icon, title string, acts []barAction, m locales.Messages) {
+	row := ui.Row(c.Key(key)).Gap(6).Height(24).Padding(0, 2, 0, 4).AlignItems(ui.Center)
+	reserve := 4 + 2 + 18 + 6 + titleRoom(c, title) + 6
+	row.Children(func() {
 		softTile(c, ic, tok.Accent, 18)
-		ui.Text(c, title).FontWeight(600).FontSize(theme.Footnote).SingleLine()
+		ui.Text(c, title).FontWeight(600).FontSize(theme.Footnote).SingleLine().Shrink(1).MinWidth(0)
 		ui.Spacer(c)
-		actions()
+		a.actionBar(c, key, row.Bounds().W, reserve, 6, acts, nil, m)
 	})
 }
+
+// filesCrumbsMin is the room a files pane's breadcrumbs keep beside the
+// remote side's actions.
+const filesCrumbsMin = 120
 
 // filesBody is a files pane below its header: the server's files, with
 // this computer's beside them (stacked when the pane is narrow) while the
@@ -1181,20 +1212,16 @@ func (a *App) filesBody(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, 
 				local := sideCard("local")
 				local.Children(func() {
 					picked := l.picked()
-					sideHeader(c, tok, icons.LocalDisk, m.Local(), func() {
-						if (IconButton{Icon: icons.GoUp, Label: m.LocalUp(), Size: Tiny}).Clicked(c, "lup") {
-							a.listLocal(l, filepath.Dir(l.dir))
-						}
-						if (IconButton{Icon: icons.Refresh, Label: m.LocalRefresh(), Size: Tiny}).Clicked(c, "lrefresh") {
-							a.listLocal(l, l.dir)
-						}
-						if (IconButton{Icon: icons.NewFolder, Label: m.LocalNewFolder(), Size: Tiny}).Clicked(c, "lmkdir") {
-							fs.ask, fs.askOpen = &nameAsk{kind: askMkdir}, true
-						}
-						if (IconButton{Icon: icons.Upload, Label: m.UploadSelected(), Disabled: s.client == nil || len(picked) == 0, Size: Tiny}).Clicked(c, "upload") {
-							a.Upload(cn, l.paths(false, picked), s.dir)
-						}
-					})
+					a.sideHeader(c, "lhead:"+strconv.Itoa(cn.id), tok, icons.LocalDisk, m.Local(), []barAction{
+						{Key: "lup", Button: IconButton{Icon: icons.GoUp, Label: m.LocalUp(), Size: Tiny},
+							Do: func() { a.listLocal(l, filepath.Dir(l.dir)) }},
+						{Key: "lrefresh", Button: IconButton{Icon: icons.Refresh, Label: m.LocalRefresh(), Size: Tiny},
+							Do: func() { a.listLocal(l, l.dir) }},
+						{Key: "lmkdir", Button: IconButton{Icon: icons.NewFolder, Label: m.LocalNewFolder(), Size: Tiny},
+							Do: func() { fs.ask, fs.askOpen = &nameAsk{kind: askMkdir}, true }},
+						{Key: "upload", Button: IconButton{Icon: icons.Upload, Label: m.UploadSelected(), Disabled: s.client == nil || len(picked) == 0, Size: Tiny},
+							Do: func() { a.Upload(cn, l.paths(false, picked), s.dir) }},
+					}, m)
 					a.crumbsBar(c, cn, false, tok, m)
 					tb, opened := a.fileTable(c, cn, false, m, tok)
 					if e, ok := selected(l.sel, l.entries); (tb.Submitted() || opened) && ok {
@@ -1216,53 +1243,55 @@ func (a *App) filesBody(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, 
 				}
 			})
 		}
-		// remoteActions are the remote side's buttons: in its header
+		// remoteActions are the remote side's actions: in its header
 		// beside the local side, else in one row with its breadcrumbs.
-		remoteActions := func() {
+		remoteActions := func() []barAction {
+			var acts []barAction
 			if s.opening {
-				ui.Spinner(c)
+				acts = append(acts, barAction{Key: "ropening", Show: func() ui.Element { return ui.Spinner(c) }})
 			}
 			picked := s.picked()
 			off := s.client == nil
-			if (IconButton{Icon: icons.GoUp, Label: m.RemoteUp(), Disabled: off, Size: Tiny}).Clicked(c, "rup") && s.dir != "" {
-				a.listRemote(s, sftpsvc.RemoteParent(s.dir))
-			}
-			if (IconButton{Icon: icons.Refresh, Label: m.RemoteRefresh(), Disabled: off, Size: Tiny}).Clicked(c, "rrefresh") {
-				a.listRemote(s, s.dir)
-			}
-			if (IconButton{Icon: icons.NewFolder, Label: m.RemoteNewFolder(), Disabled: off, Size: Tiny}).Clicked(c, "rmkdir") {
-				fs.ask, fs.askOpen = &nameAsk{kind: askMkdir, remote: true}, true
-			}
+			acts = append(acts,
+				barAction{Key: "rup", Button: IconButton{Icon: icons.GoUp, Label: m.RemoteUp(), Disabled: off, Size: Tiny}, Do: func() {
+					if s.dir != "" {
+						a.listRemote(s, sftpsvc.RemoteParent(s.dir))
+					}
+				}},
+				barAction{Key: "rrefresh", Button: IconButton{Icon: icons.Refresh, Label: m.RemoteRefresh(), Disabled: off, Size: Tiny},
+					Do: func() { a.listRemote(s, s.dir) }},
+				barAction{Key: "rmkdir", Button: IconButton{Icon: icons.NewFolder, Label: m.RemoteNewFolder(), Disabled: off, Size: Tiny},
+					Do: func() { fs.ask, fs.askOpen = &nameAsk{kind: askMkdir, remote: true}, true }})
 			if !dual {
-				if (IconButton{Icon: icons.Upload, Label: m.UploadFiles(), Disabled: off || a.p.PickFiles == nil, Size: Tiny}).Clicked(c, "rupfiles") {
-					a.pickUpload(cn, s.dir, false, m)
-				}
-				if (IconButton{Icon: icons.UploadFolder, Label: m.UploadFolder(), Disabled: off || a.p.PickFolder == nil, Size: Tiny}).Clicked(c, "rupfolder") {
-					a.pickUpload(cn, s.dir, true, m)
-				}
+				acts = append(acts,
+					barAction{Key: "rupfiles", Button: IconButton{Icon: icons.Upload, Label: m.UploadFiles(), Disabled: off || a.p.PickFiles == nil, Size: Tiny},
+						Do: func() { a.pickUpload(cn, s.dir, false, m) }},
+					barAction{Key: "rupfolder", Button: IconButton{Icon: icons.UploadFolder, Label: m.UploadFolder(), Disabled: off || a.p.PickFolder == nil, Size: Tiny},
+						Do: func() { a.pickUpload(cn, s.dir, true, m) }})
 			}
 			label := m.DownloadSelected()
 			if !dual {
 				label = m.DownloadTo()
 			}
-			if (IconButton{Icon: icons.Download, Label: label, Disabled: off || len(picked) == 0, Size: Tiny}).Clicked(c, "download") {
-				a.downloadTo(cn, s.paths(true, picked), m)
-			}
+			return append(acts, barAction{Key: "download", Button: IconButton{Icon: icons.Download, Label: label, Disabled: off || len(picked) == 0, Size: Tiny},
+				Do: func() { a.downloadTo(cn, s.paths(true, picked), m) }})
 		}
 		remotePane := func() {
 			ui.Box(c.Key("rpad")).Fill().Padding(gap(false)).Children(func() {
 				remote := sideCard("remote")
 				remote.Children(func() {
 					if dual {
-						sideHeader(c, tok, icons.Host, m.Remote(), remoteActions)
+						a.sideHeader(c, "rhead:"+strconv.Itoa(cn.id), tok, icons.Host, m.Remote(), remoteActions(), m)
 					} else {
-						ui.Row(c.Key("rbar")).Gap(2).MinHeight(24).Shrink(0).FillWidth().AlignItems(ui.Center).Children(func() {
+						// The breadcrumbs keep room for a few folders.
+						bar := ui.Row(c.Key("rbar")).Gap(2).MinHeight(24).Shrink(0).FillWidth().AlignItems(ui.Center)
+						bar.Children(func() {
 							ui.Row(c.Key("rcrumbsbox")).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center).Children(func() {
 								if s.client != nil {
 									a.crumbsBar(c, cn, true, tok, m)
 								}
 							})
-							remoteActions()
+							a.actionBar(c, "rbar:"+strconv.Itoa(cn.id), bar.Bounds().W, filesCrumbsMin+2, 2, remoteActions(), nil, m)
 						})
 					}
 					if s.client == nil {
@@ -1277,6 +1306,9 @@ func (a *App) filesBody(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, 
 							}
 							if s.err != "" {
 								ui.Text(c, a.pv(m.ErrGeneric(securityText(m, s.err)))).TextColor(tok.Danger).FontSize(theme.Footnote)
+							}
+							if s.sudoHeld {
+								a.sudoHeldActions(c, cn, m)
 							}
 						})
 						return

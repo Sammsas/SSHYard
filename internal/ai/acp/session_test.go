@@ -99,10 +99,11 @@ func (g *fixedGate) Authorize(ctx context.Context, a policy.Action, diff string)
 	return v, nil
 }
 
-func (g *fixedGate) Done(a policy.Action, v policy.Verdict, exit int, durMS int64, outBytes int64) {
+func (g *fixedGate) Done(a policy.Action, v policy.Verdict, exit int, durMS int64, outBytes int64) error {
 	g.mu.Lock()
 	g.dones = append(g.dones, doneRec{exit: exit, n: outBytes})
 	g.mu.Unlock()
+	return nil
 }
 
 func (g *fixedGate) snapshot() (actions []policy.Action, diffs []string, dones []doneRec) {
@@ -754,7 +755,7 @@ func TestModeAndModel(t *testing.T) {
 		t.Fatal(cs.Diagnostics())
 	}
 	cl := mustStart(t, "modes default default\n", Config{Type: "claude", Gate: &fixedGate{run: true}})
-	cd := waitDiag(t, cl, "allowDangerouslySkipPermissions")
+	cd := waitDiag(t, cl, "\nmcp ")
 	if strings.Contains(cd, "set_mode") || !strings.Contains(cd, `"allowDangerouslySkipPermissions":false`) || !strings.Contains(cd, "mcp []") {
 		t.Fatalf("claude diag %s", cd)
 	}
@@ -846,8 +847,8 @@ func (g *seenGate) Authorize(ctx context.Context, a policy.Action, diff string) 
 	return v, err
 }
 
-func (g *seenGate) Done(a policy.Action, v policy.Verdict, exit int, durMS int64, outBytes int64) {
-	g.inner.Done(a, v, exit, durMS, outBytes)
+func (g *seenGate) Done(a policy.Action, v policy.Verdict, exit int, durMS int64, outBytes int64) error {
+	return g.inner.Done(a, v, exit, durMS, outBytes)
 }
 
 func (g *seenGate) snapshot() []policy.Action {

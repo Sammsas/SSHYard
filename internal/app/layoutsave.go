@@ -17,12 +17,14 @@ import (
 
 // Version 1 keeps workspace structure only, never session content or directories.
 // The "panels" and "stackPct" an older build saved are ignored: those panels
-// are tool panes now, which are not saved.
+// are tool panes now, saved as panes on no host.
 type layoutSnap struct {
 	Version  int             `json:"version"`
 	Active   int             `json:"active"`
 	Tabs     []tabSnap       `json:"tabs"`
 	Sections map[string]bool `json:"sections,omitempty"`
+	// Widths are the railWidths, by kind name.
+	Widths map[string]float32 `json:"widths,omitempty"`
 }
 type tabSnap struct {
 	Title string    `json:"title,omitempty"`
@@ -60,6 +62,12 @@ func (a *App) layoutSnapshot() layoutSnap {
 			snap.Sections[key] = *p
 		}
 	}
+	for k, w := range a.railWidths {
+		if snap.Widths == nil {
+			snap.Widths = map[string]float32{}
+		}
+		snap.Widths[k.String()] = w
+	}
 	for i, t := range a.ws.Tabs {
 		if t == nil {
 			continue
@@ -94,8 +102,11 @@ func (a *App) snapNode(n *layout.Node) *nodeSnap {
 		return &nodeSnap{Split: split, Ratio: n.Ratio, A: left, B: right}
 	}
 	c := a.conns[n.Item.ID]
-	if c == nil || isTemp(c.host.ID) || c.kind == layout.Editor || isTool(c.kind) {
+	if c == nil || isTemp(c.host.ID) || c.kind == layout.Editor {
 		return nil
+	}
+	if isTool(c.kind) {
+		return &nodeSnap{ID: n.ID, Kind: c.kind.String()}
 	}
 	host := c.host.ID
 	if host == localID {

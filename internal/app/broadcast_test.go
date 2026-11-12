@@ -2,12 +2,14 @@ package app
 
 import (
 	"errors"
+	"math"
 	"strconv"
 	"testing"
 
 	"github.com/Licoy/sshyard/internal/assets"
 	"github.com/Licoy/sshyard/internal/layout"
 	"github.com/Licoy/sshyard/internal/session"
+	"github.com/Licoy/sshyard/internal/settings"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -301,6 +303,11 @@ func TestSyncKeyboardInput(t *testing.T) {
 
 func TestToolPanes(t *testing.T) {
 	a, _, cs, _ := broadcastPair(t)
+	s := a.Settings()
+	s.ToolPanes = settings.ToolPanesSplit
+	if err := a.ApplySettings(s); err != nil {
+		t.Fatal(err)
+	}
 	// One of each in the workspace: opened in a tab, then brought to
 	// another, then closed where it is.
 	a.ToggleTool(layout.Logs)
@@ -323,12 +330,13 @@ func TestToolPanes(t *testing.T) {
 	if a.focused() != cs[0] {
 		t.Fatalf("focused %v once the tool pane was clicked", a.focused())
 	}
-	// None is saved with the layout, nor takes the focus.
+	// None takes the focus; the layout saves where each is, on no host.
 	a.ToggleTool(layout.Snippets)
 	a.ToggleTool(layout.History)
 	if a.focused() != cs[0] || a.snippetTarget() != cs[0] {
 		t.Fatalf("focused %v once the snippets and history opened", a.focused())
 	}
+	saved := map[string]int{}
 	for _, tb := range a.layoutSnapshot().Tabs {
 		var walk func(n *nodeSnap)
 		walk = func(n *nodeSnap) {
@@ -336,15 +344,179 @@ func TestToolPanes(t *testing.T) {
 				return
 			}
 			if n.Kind == "logs" || n.Kind == "broadcast" || n.Kind == "snippets" || n.Kind == "history" {
-				t.Fatalf("tool pane saved: %+v", n)
+				if n.Host != "" {
+					t.Fatalf("tool pane saved with a host: %+v", n)
+				}
+				saved[n.Kind]++
 			}
 			walk(n.A)
 			walk(n.B)
 		}
 		walk(tb.Root)
 	}
+	if saved["logs"] != 1 || saved["snippets"] != 1 || saved["history"] != 1 {
+		t.Fatalf("tool panes saved %v, want logs, snippets and history once", saved)
+	}
 	a.ToggleTool(layout.Logs)
 	if a.toolPane(layout.Logs) != nil {
 		t.Fatal("the logs pane stayed open")
 	}
+}
+
+// TestToolPanesAsTabs: with the rail's panes as tabs, the default, a
+// tool, files or AI pane the rail opens, or brings from another tab,
+// takes the place of the one the tab shows, which closes; the focus stays
+// on the session.
+func TestToolPanesAsTabs(t *testing.T) {
+	a, _, cs, _ := broadcastPair(t)
+	if a.Settings().ToolPanes == settings.ToolPanesSplit {
+		t.Fatal("the rail's panes open side by side by default")
+	}
+	a.ToggleTool(layout.Snippets)
+	tab := a.ws.ActiveTab()
+	panes := len(tab.Panes())
+	a.ToggleTool(layout.History)
+	if a.toolPane(layout.Snippets) != nil || tab.Count(layout.History) != 1 || len(tab.Panes()) != panes {
+		t.Fatalf("history did not replace the snippets: %v", tab.Items())
+	}
+	if a.focused() != cs[2] {
+		t.Fatalf("focused %v, want the terminal", a.focused())
+	}
+	// From another tab, the logs come in the place of its history.
+	a.ws.Activate(cs[2].id)
+	a.ToggleTool(layout.Logs)
+	logs := a.toolPane(layout.Logs)
+	a.ws.Activate(cs[0].id)
+	other := a.ws.ActiveTab()
+	a.ToggleTool(layout.Snippets)
+	n := len(other.Panes())
+	a.ToggleTool(layout.Logs)
+	if lt, _ := a.ws.Locate(logs.id); lt != other || a.toolPane(layout.Snippets) != nil || len(other.Panes()) != n {
+		t.Fatalf("the logs did not replace the snippets: %v", other.Items())
+	}
+	if a.toolPane(layout.Logs) != logs || a.focused() != cs[0] {
+		t.Fatalf("logs %v, focused %v", a.toolPane(layout.Logs), a.focused())
+	}
+	// The tool the tab shows still closes on its own.
+	a.ToggleTool(layout.Logs)
+	if a.toolPane(layout.Logs) != nil || len(other.Panes()) != n-1 {
+		t.Fatalf("the logs stayed open: %v", other.Items())
+	}
+	// The AI pane is one of the rail's as the tools are.
+	a.ToggleTool(layout.Tmux)
+	n = len(other.Panes())
+	a.ToggleAI()
+	if a.toolPane(layout.Tmux) != nil || other.Count(layout.AI) != 1 || len(other.Panes()) != n {
+		t.Fatalf("the assistant did not replace tmux: %v", other.Items())
+	}
+	a.ToggleTool(layout.Monitor)
+	if other.Count(layout.AI) != 0 || other.Count(layout.Monitor) != 1 || len(other.Panes()) != n {
+		t.Fatalf("the monitor did not replace the assistant: %v", other.Items())
+	}
+	if a.focused() != cs[0] {
+		t.Fatalf("focused %v, want the terminal", a.focused())
+	}
+}
+
+// TestToolPanesStack: side by side, the rail opens three columns beside
+// the session, then each pane past them under a column not split yet; a
+// column closed makes room for a new one, the AI pane goes as the tools,
+// and the tools leave the focus on the session.
+func TestToolPanesStack(t *testing.T) {
+	a, tt, cs, _ := broadcastPair(t)
+	s := a.Settings()
+	s.ToolPanes = settings.ToolPanesSplit
+	if err := a.ApplySettings(s); err != nil {
+		t.Fatal(err)
+	}
+	// Room for three columns beside the session.
+	tt.SetSize(2400, 900)
+	tt.Frame()
+	tab := a.ws.ActiveTab()
+	rail := []layout.Kind{layout.Snippets, layout.History, layout.Logs}
+	for _, k := range rail {
+		a.ToggleTool(k)
+		if railAbove(a, tab, k) != nil {
+			t.Fatalf("%v opened under another pane: %v", k, tab.Items())
+		}
+	}
+	a.ToggleTool(layout.Monitor)
+	first := railAbove(a, tab, layout.Monitor)
+	if first == nil || !isTool(first.Item.Kind) {
+		t.Fatalf("the monitor did not open under a tool: %v", tab.Items())
+	}
+	// One of the other two columns closed, the next opens as a column.
+	for _, k := range rail {
+		if k != first.Item.Kind {
+			a.ToggleTool(k)
+			break
+		}
+	}
+	a.ToggleTool(layout.Usage)
+	if railAbove(a, tab, layout.Usage) != nil {
+		t.Fatalf("the usage did not open as a column: %v", tab.Items())
+	}
+	if a.focused() != cs[2] {
+		t.Fatalf("focused %v, want the terminal", a.focused())
+	}
+	a.ToggleAI()
+	second := railAbove(a, tab, layout.AI)
+	if second == nil || !isTool(second.Item.Kind) || second.Item.ID == first.Item.ID {
+		t.Fatalf("the assistant did not open under a column not split yet: %v", tab.Items())
+	}
+	if len(tab.Panes()) != 6 {
+		t.Fatalf("panes %v, want the session and five of the rail's", tab.Items())
+	}
+}
+
+// TestToolPanesFit: side by side, a column that would leave one of the
+// row's too narrow shares the row out evenly, and one with no room even
+// then opens under a column of the rail's, by the session's row even
+// once a pane of the rail's has the focus.
+func TestToolPanesFit(t *testing.T) {
+	a, _, cs, _ := broadcastPair(t)
+	s := a.Settings()
+	s.ToolPanes = settings.ToolPanesSplit
+	if err := a.ApplySettings(s); err != nil {
+		t.Fatal(err)
+	}
+	tab := a.ws.ActiveTab()
+	a.paneBounds[cs[2].id] = ui.Rect{W: 1000}
+	a.ToggleTool(layout.Snippets)
+	if r := tab.Root; r.Ratio != 0.5 {
+		t.Fatalf("snippets opened at %v, want half", r.Ratio)
+	}
+	snippets := a.toolPane(layout.Snippets)
+	a.paneBounds[cs[2].id], a.paneBounds[snippets.id] = ui.Rect{W: 496}, ui.Rect{X: 500, W: 500}
+	a.ToggleTool(layout.History)
+	r := tab.Root
+	if r.Leaf() || r.A.Leaf() || math.Abs(float64(r.Ratio)-2.0/3) > 1e-4 || r.A.Ratio != 0.5 {
+		t.Fatalf("the row was not shared out evenly: %+v", r)
+	}
+	history := a.toolPane(layout.History)
+	a.paneBounds[cs[2].id], a.paneBounds[history.id], a.paneBounds[snippets.id] = ui.Rect{W: 330}, ui.Rect{X: 334, W: 330}, ui.Rect{X: 668, W: 332}
+	a.ToggleTool(layout.Logs)
+	if above := railAbove(a, tab, layout.Logs); above == nil || above.Item.ID != history.id {
+		t.Fatalf("the logs did not open under the history with no room: %v", tab.Items())
+	}
+	// The assistant takes the focus; what opens next still goes by the
+	// session's row, under the column the logs left whole.
+	a.ToggleAI()
+	if above := railAbove(a, tab, layout.AI); above == nil || above.Item.ID != snippets.id || a.focused().kind != layout.AI {
+		t.Fatalf("the assistant did not open under the snippets: %v, focused %v", tab.Items(), a.focused())
+	}
+	a.ToggleTool(layout.Tmux)
+	if above := railAbove(a, tab, layout.Tmux); above == nil || above.Item.ID != history.id || a.focused().kind != layout.AI {
+		t.Fatalf("tmux did not open under the history: %v, focused %v", tab.Items(), a.focused())
+	}
+}
+
+// railAbove is the pane over the one of kind k in tab, nil when it has
+// none.
+func railAbove(a *App, tab *layout.Tab, k layout.Kind) *layout.Node {
+	_, p := a.ws.Locate(a.tabPane(tab, k).id)
+	if sp := tab.Parent(p); sp != nil && sp.Axis == layout.Column && sp.B == p && sp.A.Leaf() {
+		return sp.A
+	}
+	return nil
 }

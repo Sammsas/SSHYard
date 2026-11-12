@@ -29,6 +29,10 @@ type Settings struct {
 	CloseBehavior string `json:"closeBehavior"`
 	// RememberLayout restores window geometry and the workspace on next launch.
 	RememberLayout bool `json:"rememberLayout"`
+	// ToolPanes is how the right rail opens its tools: "", the default,
+	// in the place of the one open in the tab, one at a time, or
+	// ToolPanesSplit beside the ones already open.
+	ToolPanes string `json:"toolPanes,omitempty"`
 	// TrayIcon selects the monochrome or colorful application logo.
 	TrayIcon string `json:"trayIcon"`
 	// TrayClick selects the popup or the main window on a tray click.
@@ -74,6 +78,11 @@ type Settings struct {
 	TerminalCursorStyle string `json:"terminalCursorStyle"`
 	// TerminalCursorBlink allows the terminal cursor to blink.
 	TerminalCursorBlink bool `json:"terminalCursorBlink"`
+	// TerminalLineNumbers and TerminalTimestamps show, left of the
+	// terminal's lines, their number and the time output reached them;
+	// both off by default.
+	TerminalLineNumbers bool `json:"terminalLineNumbers,omitempty"`
+	TerminalTimestamps  bool `json:"terminalTimestamps,omitempty"`
 	// TerminalFont is the terminal's font family, "" for the system's
 	// monospaced font.
 	TerminalFont string `json:"terminalFont,omitempty"`
@@ -116,6 +125,9 @@ type Settings struct {
 	// FilesEdge is where a files pane opened from a terminal goes:
 	// FilesRight, the default, or FilesBelow.
 	FilesEdge string `json:"filesEdge,omitempty"`
+	// FilesZoom is how large the rows of files panes show, in percent,
+	// one of FilesZooms; 0 is 100.
+	FilesZoom int `json:"filesZoom,omitempty"`
 	// EditorTreeWidth is the width, in DIPs, of the folders beside the
 	// text in an editor window, 140 to 600; EditorTreeHidden hides them.
 	EditorTreeWidth  float32 `json:"editorTreeWidth,omitempty"`
@@ -129,11 +141,14 @@ type Settings struct {
 	// terminal.
 	CopyOnSelect bool `json:"copyOnSelect,omitempty"`
 	// OSC52Write is whether a remote program may copy to the local
-	// clipboard: allow (the default), ask or deny.
+	// clipboard: allow, ask (the default) or deny.
 	OSC52Write string `json:"osc52Write"`
 	// OSC52MaxBytes is the largest decoded OSC 52 paste to keep,
 	// from 64 KiB to 8 MiB.
 	OSC52MaxBytes int `json:"osc52MaxBytes"`
+	// OSC52Notify shows a notice, with Undo, after a remote program
+	// writes to the clipboard. Off writes silently.
+	OSC52Notify bool `json:"osc52Notify"`
 	// MetricsEnabled shows the terminal metrics bar. Off hides it on every
 	// host. A host can still hide its own bar while this is on.
 	MetricsEnabled bool `json:"metricsEnabled"`
@@ -604,6 +619,10 @@ const (
 	FilesBelow = "below"
 )
 
+// ToolPanesSplit opens a rail tool beside the ones already open in the
+// tab, rather than in the place of the one it shows.
+const ToolPanesSplit = "split"
+
 // MCPPortDefault is the MCP endpoint's port unless the user picks one.
 const MCPPortDefault = 47320
 
@@ -614,6 +633,18 @@ var UpdateIntervals = []int{1, 2, 6, 12, 24}
 // UIZooms are the interface zooms, in percent, the user can choose
 // besides following the system, smallest first.
 var UIZooms = []int{80, 90, 100, 110, 125, 150, 175, 200}
+
+// FilesZooms are the zooms of files panes' rows, in percent, the user
+// can choose, smallest first.
+var FilesZooms = []int{80, 90, 100, 110, 125, 150, 175, 200}
+
+// FilesScale is FilesZoom as a factor, 1 for 100%.
+func (s Settings) FilesScale() float32 {
+	if s.FilesZoom == 0 {
+		return 1
+	}
+	return float32(s.FilesZoom) / 100
+}
 
 // Languages are the languages SSHYard ships, besides following the system.
 var Languages = []string{"en", "zh-Hans", "zh-Hant", "ko", "ja"}
@@ -643,8 +674,10 @@ func ClampTrayHeight(height int) int {
 	return min(max(height, MinTrayHeight), MaxTrayHeight)
 }
 
-// The bounds of TerminalLineHeight and TerminalCharWidth, in percent.
+// The bounds of TerminalFontSize, in points, and of TerminalLineHeight
+// and TerminalCharWidth, in percent.
 const (
+	MinFontSize, MaxFontSize     = 8, 32
 	MinLineHeight, MaxLineHeight = 80, 200
 	MinCharWidth, MaxCharWidth   = 80, 150
 )
@@ -658,7 +691,7 @@ const (
 
 // Default returns the defaults.
 func Default() Settings {
-	return Settings{Background: DefaultBackground(), Theme: theme.Auto, CloseBehavior: CloseToTray, TrayIcon: TrayIconColor, TrayClick: TrayClickPanel, TrayMaterial: MaterialTranslucent, TrayHeight: DefaultTrayHeight, CheckUpdates: true, UpdateIntervalHours: 1, TerminalFontSize: 13, TerminalLineHeight: 100, TerminalCharWidth: 100, TerminalCursorStyle: CursorBlock, TerminalCursorBlink: true, KeepAliveSeconds: 30, AutoReconnect: true, SidebarWidth: 240, ChromeMaterial: MaterialTranslucent, ContentMaterial: MaterialOpaque, MonospacedOnly: true, TransferConcurrency: 3, OpenConfirmMB: 10, FilesSplit: 50, FilesEdge: FilesRight, TerminalRightClick: RightClickMenu, EditorTreeWidth: 240, OSC52Write: OSC52Ask, OSC52MaxBytes: OSC52MaxDefault, MetricsEnabled: true, MetricsInterval: 2,
+	return Settings{Background: DefaultBackground(), Theme: theme.Auto, CloseBehavior: CloseToTray, TrayIcon: TrayIconColor, TrayClick: TrayClickPanel, TrayMaterial: MaterialTranslucent, TrayHeight: DefaultTrayHeight, CheckUpdates: true, UpdateIntervalHours: 1, TerminalFontSize: 13, TerminalLineHeight: 100, TerminalCharWidth: 100, TerminalCursorStyle: CursorBlock, TerminalCursorBlink: true, KeepAliveSeconds: 30, AutoReconnect: true, SidebarWidth: 240, ChromeMaterial: MaterialTranslucent, ContentMaterial: MaterialOpaque, MonospacedOnly: true, TransferConcurrency: 3, OpenConfirmMB: 10, FilesSplit: 50, FilesEdge: FilesRight, TerminalRightClick: RightClickMenu, EditorTreeWidth: 240, OSC52Write: OSC52Ask, OSC52MaxBytes: OSC52MaxDefault, OSC52Notify: true, MetricsEnabled: true, MetricsInterval: 2,
 		AIDefaultAgent: "builtin", AIDefaultMode: "ask", AIReviewStrictness: AIReviewStandard, AIContextLines: 200, AIAuditRetentionDays: 90, AIRequestTimeout: DefaultAIRequestTimeout, AIRedact: true, MCPPort: MCPPortDefault, LocalKeys: true, Highlight: Highlight{On: true}, RenewalNotify: true}
 }
 
@@ -716,7 +749,7 @@ func (s *Settings) Normalize() {
 	default:
 		s.TerminalCursorStyle = d.TerminalCursorStyle
 	}
-	if s.TerminalFontSize < 8 || s.TerminalFontSize > 32 {
+	if s.TerminalFontSize < MinFontSize || s.TerminalFontSize > MaxFontSize {
 		s.TerminalFontSize = d.TerminalFontSize
 	}
 	if s.TerminalLineHeight < MinLineHeight || s.TerminalLineHeight > MaxLineHeight {
@@ -748,8 +781,14 @@ func (s *Settings) Normalize() {
 	if s.FilesSplit < 10 || s.FilesSplit > 90 {
 		s.FilesSplit = d.FilesSplit
 	}
+	if s.ToolPanes != ToolPanesSplit {
+		s.ToolPanes = ""
+	}
 	if s.FilesEdge != FilesBelow {
 		s.FilesEdge = FilesRight
+	}
+	if s.FilesZoom == 100 || !slices.Contains(FilesZooms, s.FilesZoom) {
+		s.FilesZoom = 0
 	}
 	if s.EditorTreeWidth < 140 || s.EditorTreeWidth > 600 {
 		s.EditorTreeWidth = d.EditorTreeWidth

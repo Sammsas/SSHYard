@@ -260,6 +260,47 @@ func TestQueueUploadKeepsModeAndTime(t *testing.T) {
 	}
 }
 
+// Uploads go into group-writable (umask 002, shared) and sticky (/tmp)
+// folders; only a folder anyone may write to without the sticky bit is
+// refused, at once rather than after retries.
+func TestQueueUploadDestinationFolderModes(t *testing.T) {
+	r, root := queueServer(t)
+	src := filepath.Join(t.TempDir(), "install.txt")
+	os.WriteFile(src, []byte("install"), 0o644)
+	cases := []struct {
+		name string
+		mode fs.FileMode
+		ok   bool
+	}{
+		{"group", 0o775, true},
+		{"setgid", 0o775 | fs.ModeSetgid, true},
+		{"sticky", 0o777 | fs.ModeSticky, true},
+		{"open", 0o777, false},
+	}
+	ts := newQueue(r)
+	for _, tc := range cases {
+		dir := filepath.Join(root, tc.name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, tc.mode); err != nil {
+			t.Fatal(err)
+		}
+		ts.Add(Upload, src, dir+"/install.txt", tc.name)
+	}
+	ts.Wait()
+	for i, tr := range ts.List() {
+		tc := cases[i]
+		_, statErr := os.Stat(filepath.Join(root, tc.name, "install.txt"))
+		if tc.ok && (tr.State != Done || statErr != nil) {
+			t.Errorf("%s: %v %v, upload refused", tc.name, tr.State, tr.Err)
+		}
+		if !tc.ok && (tr.State != Failed || !errors.Is(tr.Err, ErrUnsafeDestination) || tr.Attempt != 0 || statErr == nil) {
+			t.Errorf("%s: %v %v after %d retries, want ErrUnsafeDestination at once", tc.name, tr.State, tr.Err, tr.Attempt)
+		}
+	}
+}
+
 func bigFile(t *testing.T, p string, n int) []byte {
 	data := make([]byte, n)
 	rand.Read(data)
@@ -375,6 +416,130 @@ func TestQueueCancelLeavesNothing(t *testing.T) {
 	ts.Wait()
 	if l := ts.List(); l[0].State != Done || l[1].State != Done || l[0].Offset != 0 {
 		t.Fatalf("%+v", l)
+	}
+}
+
+// A server that stops answering mid-transfer while SSH lives on: a
+// pause or a cancel ends the request under way at once, its slot goes to
+// the next transfer, and the shared client and the part file's
+// semantics (resumed when paused, removed when canceled) are kept.
+func TestQueueStopStalledServer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dir  Direction
+		stop string
+	}{{"download pause", Download, "pause"}, {"download cancel", Download, "cancel"}, {"upload cancel", Upload, "cancel"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := queueServer(t)
+			data := bytes.Repeat([]byte("0123456789abcdef"), 8<<16) // 8 MiB: more than in flight
+			fake := &sshtest.FakeFS{Files: map[string][]byte{"/next": []byte("next")}}
+			local := t.TempDir()
+			src, dst := "/big", filepath.Join(local, "big")
+			if tc.dir == Upload {
+				src, dst = dst, "/big"
+				if err := os.WriteFile(src, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				fake.Files["/big"] = data
+			}
+			r.srv.SFTPHandlers, r.srv.SFTPConn = fake.Handlers, fake.Conn
+			defer fake.Resume()
+			shared, err := r.get(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ts := newQueue(r)
+			ts.SetConcurrency(1)
+			stalled := make(chan struct{})
+			var once sync.Once
+			ts.onWrite = func(*Transfer, int64) { once.Do(func() { fake.Stop(); close(stalled) }) }
+			big := ts.Add(tc.dir, src, dst, "big")
+			next := ts.Add(Download, "/next", filepath.Join(local, "next"), "next")
+			select {
+			case <-stalled:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the transfer did not start")
+			}
+			time.Sleep(50 * time.Millisecond) // requests now wait for answers
+			if tc.stop == "pause" {
+				ts.Pause(big)
+			} else {
+				ts.Cancel(big)
+			}
+			deadline := time.Now().Add(time.Second)
+			for {
+				l := ts.List()
+				if !l[0].stopping && l[1].State == Running {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("still stopping a second later: %+v", l)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			fake.Resume()
+			if _, err := shared.Home(); err != nil {
+				t.Fatalf("shared client closed: %v", err)
+			}
+			// onWrite stays: the transfer goroutine reads it, and once
+			// keeps it from stopping the server again.
+			if tc.stop == "pause" {
+				ts.Resume(big)
+			}
+			ts.Wait()
+			l := ts.List()
+			if l[1].ID != next || l[1].State != Done {
+				t.Fatalf("next: %+v", l[1])
+			}
+			if got, _ := os.ReadFile(filepath.Join(local, "next")); string(got) != "next" {
+				t.Fatalf("next copied %q", got)
+			}
+			switch {
+			case tc.stop == "pause":
+				if l[0].State != Done || l[0].Offset <= 0 {
+					t.Fatalf("resumed: %+v", l[0])
+				}
+				if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+					t.Fatal("resumed download differs")
+				}
+			case l[0].State != Canceled:
+				t.Fatalf("canceled: %+v", l[0])
+			case tc.dir == Download && (LocalExists(dst) || LocalExists(l[0].part)):
+				t.Fatalf("download left %v", l[0].part)
+			case tc.dir == Upload && (fake.File(dst) != nil || fake.File(l[0].part) != nil):
+				t.Fatalf("upload left %v", fake.Names())
+			}
+			if n := r.n.Load(); n != 1 {
+				t.Fatalf("dialed %d times", n)
+			}
+		})
+	}
+}
+
+// Closing the shared client (sudo switched, say) ends the transfers on
+// channels it opened: they go on with the next one, as before.
+func TestQueueSharedCloseEndsTransferChannel(t *testing.T) {
+	r, root := queueServer(t)
+	data := bigFile(t, filepath.Join(root, "big.bin"), 4<<20)
+	dst := filepath.Join(t.TempDir(), "big.bin")
+	ts := newQueue(r)
+	var once sync.Once
+	ts.onWrite = func(*Transfer, int64) {
+		once.Do(func() {
+			r.mu.Lock()
+			r.c.Close()
+			r.mu.Unlock()
+		})
+	}
+	ts.Add(Download, root+"/big.bin", dst, "big.bin")
+	ts.Wait()
+	tr := ts.List()[0]
+	if tr.State != Done || tr.Attempt != 1 || r.n.Load() != 2 {
+		t.Fatalf("%+v, dialed %d times", tr, r.n.Load())
+	}
+	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+		t.Fatal("download differs")
 	}
 }
 
