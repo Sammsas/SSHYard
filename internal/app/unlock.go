@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 
 	"github.com/Licoy/sshyard/internal/keychain"
+	"github.com/Licoy/sshyard/locales"
+	"github.com/egoist/mygo/ui"
 )
 
 // Authorization runs off the UI thread; completed actions return through post.
@@ -63,10 +65,23 @@ func (a *App) prepareStorage() error {
 	if err != nil {
 		return err
 	}
+	// A reset of the app lock left the data folder to empty, now that no
+	// other copy writes to it.
+	if done, err := finishReset(a.p.DataDir); err != nil {
+		a.closeSecrets(kc)
+		return &keychain.OpError{Op: "file-write", Err: err}
+	} else if done {
+		a.closeSecrets(kc)
+		if kc, err = a.openSecrets(); err != nil {
+			return err
+		}
+		a.toast(func(m locales.Messages) ui.Toast { return ui.Toast{Title: m.AppLockResetDone()} })
+	}
 	if err := a.loadData(); err != nil {
 		a.closeSecrets(kc)
 		return &keychain.OpError{Op: "file-read", Err: err}
 	}
+	a.loadAppLock()
 	_, statErr := os.Stat(filepath.Join(a.p.DataDir, "secrets.enc"))
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		a.closeSecrets(kc)
@@ -77,6 +92,9 @@ func (a *App) prepareStorage() error {
 	a.keychainOK = true
 	a.unlock.ready.Store(true)
 	a.unlock.secretsReady.Store(kc.Unlocked())
+	if kc.Unlocked() {
+		a.adoptLockRecord()
+	}
 	a.syncChoices()
 	a.resolveFonts(false, false, false)
 	a.updateCheck = a.settings.CheckUpdates
@@ -182,6 +200,11 @@ func (a *App) acceptUnlock(err error) {
 	after := a.unlock.after
 	a.unlock.after = nil
 	a.unlock.mu.Unlock()
+	// What asked for the store is dropped when the lock was found
+	// replaced: the store's own record locks the app again first.
+	if a.adoptLockRecord() {
+		after = nil
+	}
 	a.startRestoredConnections()
 	if !a.unlock.servicesStarted {
 		a.unlock.servicesStarted = true

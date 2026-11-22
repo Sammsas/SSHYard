@@ -52,14 +52,31 @@ type hostForm struct {
 	dirsOpen                     bool
 	// tmux is the tmux session the host's terminals attach to (Host.Tmux)
 	tmux string
+	// startup is the commands the host's terminals type as their shell
+	// starts (Host.Startup), startupOrig those it had; startupGen renews
+	// the field once a snippet is added to it, startupPick the snippet
+	// select's label
+	startup, startupOrig string
+	startupGen           int
+	startupPick          string
 	// encoding is the output encoding of the host's new terminals
 	// (Host.Encoding)
 	encoding vt.OutputEncoding
+	// term is the TERM of the host's new terminals (Host.Term), ""
+	// the setting's; termCustom edits it as text rather than a preset.
+	term       string
+	termCustom bool
 	// sessionLog logs the host's terminals as they connect
 	// (Host.SessionLog)
 	sessionLog bool
 	// sftpSudo runs the host's SFTP through sudo (Host.SFTPSudo)
 	sftpSudo bool
+	// fileProtoIdx is the host's files protocol (Host.FileProtocol), in
+	// fileProtocols
+	fileProtoIdx int
+	// transfers lets the host's terminals take ZMODEM and trzsz
+	// transfers (not Host.TransfersOff)
+	transfers bool
 	// osc52 is the override's label once Advanced is open; osc52Code is
 	// the saved policy ("", allow, ask, deny), so a save before that
 	// keeps it. advOpen shows Advanced.
@@ -75,6 +92,9 @@ type hostForm struct {
 	// promote is the temporary host being saved, whose panes then show
 	// the new host
 	promote string
+	// from is the host a new one is cloned from, whose saved secrets it
+	// copies unless replaced
+	from string
 	streamForm
 	renewalForm
 }
@@ -123,16 +143,17 @@ func (a *App) authLabel(m locales.Messages, h assets.Host) string {
 }
 
 func (a *App) openEditor(h *assets.Host) {
-	if h != nil && h.Auth == assets.AuthKey && !a.unlocked() {
+	if h != nil && (h.Auth == assets.AuthKey || h.SSH() && h.Startup) && !a.unlocked() {
 		a.withSecrets(func() { a.openEditor(h) })
 		return
 	}
 
-	f := &hostForm{isNew: h == nil, port: "22", cwdFollow: true, encoding: vt.EncodingUTF8}
+	f := &hostForm{isNew: h == nil, port: "22", cwdFollow: true, encoding: vt.EncodingUTF8, transfers: true}
 	f.loadStream(h)
 	f.loadRenewal(h, time.Now())
 	if h != nil {
 		f.orig = *h
+		f.transfers = !h.TransfersOff
 		f.name, f.address, f.port = h.Name, h.Address, strconv.Itoa(h.Port)
 		f.user, f.group, f.favorite, f.cwdFollow = h.User, h.Group, h.Favorite, h.CwdFollow
 		f.icon, f.color = h.Icon, h.Color
@@ -145,11 +166,23 @@ func (a *App) openEditor(h *assets.Host) {
 		f.netOpen = f.proxy != "" || len(f.jumps) > 0
 		f.termDir, f.remoteDir, f.localDir = h.TerminalDir, h.RemoteDir, h.LocalDir
 		f.tmux = h.Tmux
+		if h.SSH() && h.Startup {
+			if data, err := a.kc.Get(keychain.HostStartup(h.ID)); err == nil {
+				f.startup = string(data)
+				clear(data)
+			} else if !errors.Is(err, keychain.ErrNotFound) {
+				f.err = secretStoreErrorText(locales.In(a.settings.Language), err)
+			}
+			f.startupOrig = f.startup
+		}
 		f.sessionLog = h.SessionLog
 		f.sftpSudo = h.SFTPSudo
+		f.fileProtoIdx = max(slices.Index(fileProtocols, h.FileProtocol), 0)
 		if e := vt.OutputEncoding(h.Encoding); slices.Contains(vt.OutputEncodings(), e) {
 			f.encoding = e
 		}
+		f.term = h.Term
+		f.termCustom = h.Term != "" && !slices.Contains(termPresets, h.Term)
 		f.dirsOpen = f.termDir != "" || f.remoteDir != "" || f.localDir != ""
 		f.osc52Code = h.OSC52
 		f.advOpen = h.OSC52 != ""
@@ -177,6 +210,19 @@ func (a *App) openEditor(h *assets.Host) {
 		}
 	}
 	a.form, a.editing = f, true
+}
+
+// openClone opens the editor on a new host with h's settings and saved
+// secrets, as a start for a similar one.
+func (a *App) openClone(h assets.Host) {
+	if (h.Auth == assets.AuthPassword || h.Auth == assets.AuthKey || h.SSH() && h.Startup) && !a.unlocked() {
+		a.withSecrets(func() { a.openClone(h) })
+		return
+	}
+	a.openEditor(&h)
+	f := a.form
+	f.isNew, f.from = true, h.ID
+	f.orig.ID, f.orig.Created, f.orig.Updated = "", time.Time{}, time.Time{}
 }
 
 func osc52Choices(m locales.Messages) (labels, codes []string) {
@@ -224,6 +270,10 @@ func fieldError(m locales.Messages, err error) string {
 		return m.InvalidPort()
 	case fe.Field == "serial":
 		return m.InvalidSerialSettings()
+	case fe.Field == "term":
+		return m.TermTypeInvalid()
+	case fe.Field == "startup":
+		return m.StartupInvalid()
 	case fe.Field == "jump" && fe.Reason == "not ssh":
 		return m.JumpNotSSH()
 	case fe.Field == "host" && fe.Reason == "not ssh":
@@ -280,12 +330,22 @@ func (a *App) SaveForm(m locales.Messages) bool {
 	h.TerminalDir, h.RemoteDir, h.LocalDir = f.termDir, f.remoteDir, f.localDir
 	h.Tmux = strings.TrimSpace(f.tmux)
 	h.Encoding = string(f.encoding)
+	h.Term = f.term
 	h.SessionLog = f.sessionLog
 	h.SFTPSudo = f.sftpSudo
+	h.FileProtocol = fileProtocols[f.fileProtoIdx]
+	h.TransfersOff = !f.transfers
 	if h.SSH() && h.Tmux != "" && !session.TmuxNameOK(h.Tmux) {
 		f.err = m.TmuxNameInvalid()
 		return false
 	}
+	if h.SSH() {
+		if err := assets.ValidateStartup(f.startup); err != nil {
+			f.err = fieldError(m, err)
+			return false
+		}
+	}
+	h.Startup = startupText(f) != ""
 	h.OSC52 = osc52CodeFrom(m, f)
 	mode := ""
 	if f.aiIdx >= 0 && f.aiIdx < 4 {
@@ -474,13 +534,17 @@ func (a *App) editorView(c *ui.Context, m locales.Messages) {
 									a.dirFields(c, m, tok, f)
 								})
 							})
-							sftpSudoField(c, m, tok, f)
+							fileProtocolField(c, m, tok, f)
+							if fileProtocols[f.fileProtoIdx] != assets.FileSCP {
+								sftpSudoField(c, m, tok, f)
+							}
 							ui.Field(c, m.TmuxAutoAttach(), func() {
 								ui.Column(c).Gap(4).FillWidth().Children(func() {
 									formTextInput(c.Key("f:tmux"), &f.tmux).Placeholder(m.TmuxAutoAttachPlaceholder()).Label(m.TmuxAutoAttach()).FillWidth()
 									ui.Text(c, m.TmuxAutoAttachHint()).FontSize(theme.Caption).TextColor(tok.TextMuted)
 								})
 							})
+							a.startupField(c, m, tok, f)
 							ui.Field(c, m.MetricsBar(), func() {
 								ui.Column(c).Gap(4).Children(func() {
 									formSegmented(c.Key("f:met"), &f.metricsIdx, !a.settings.MetricsEnabled, m.MetricsFollow(), m.MetricsHostOn(), m.MetricsHostOff()).Label(m.MetricsBar())
@@ -493,7 +557,11 @@ func (a *App) editorView(c *ui.Context, m locales.Messages) {
 							a.streamTermFields(c, m, tok, f)
 						}
 						encodingField(c, m, tok, f)
+						if f.protocol() != assets.ProtoSerial {
+							a.termTypeField(c, m, tok, f)
+						}
 						sessionLogField(c, m, tok, f)
+						a.transfersField(c, m, tok, f)
 						ui.Field(c, "", func() {
 							ui.Collapsible(c.Key("f:renewal"), m.RenewalSection(), &f.renewOpen, func() {
 								a.renewalFields(c, m, tok, f)
@@ -644,6 +712,76 @@ func (a *App) dirFields(c *ui.Context, m locales.Messages, tok theme.Tokens, f *
 	})
 }
 
+// startupField is the commands the host's terminals type each time their
+// shell starts, to which a saved snippet's body can be added.
+func (a *App) startupField(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hostForm) {
+	ui.Field(c, m.StartupCommands(), func() {
+		ui.Column(c).Gap(6).FillWidth().Children(func() {
+			formTextArea(c.Key("f:startup:"+strconv.Itoa(f.startupGen)), &f.startup).Label(m.StartupCommands()).
+				Placeholder("source ~/.venv/bin/activate").Font(a.termFamily()).FillWidth().Height(72)
+			if snippets := a.store.Snippets(); len(snippets) > 0 {
+				labels := []string{m.StartupFromSnippet()}
+				for _, n := range snippets {
+					label := n.Name
+					if n.Group != "" {
+						label = n.Group + " / " + n.Name
+					}
+					labels = append(labels, label)
+				}
+				f.startupPick = m.StartupFromSnippet()
+				if formSelect(c.Key("f:startsnip"), &f.startupPick, labels).Label(m.StartupFromSnippet()).FillWidth().Changed() {
+					if i := slices.Index(labels[1:], f.startupPick); i >= 0 {
+						a.addStartupSnippet(m, f, snippets[i].ID)
+					}
+					f.startupPick = m.StartupFromSnippet()
+				}
+			}
+			ui.Text(c, m.StartupCommandsHint()).FontSize(theme.Caption).TextColor(tok.TextMuted)
+		})
+	})
+}
+
+// addStartupSnippet adds the body of the snippet of id to the editor's
+// startup commands, a copy that later edits of the snippet leave alone.
+func (a *App) addStartupSnippet(m locales.Messages, f *hostForm, id string) {
+	if !a.unlocked() {
+		a.withSecrets(func() {
+			if a.form == f {
+				a.addStartupSnippet(m, f, id)
+			}
+		})
+		return
+	}
+	text, err := a.snippetContent(id)
+	if err != nil {
+		f.err = m.StartupSnippetUnreadable()
+		return
+	}
+	if strings.TrimSpace(f.startup) != "" {
+		text = strings.TrimRight(f.startup, "\r\n") + "\n" + text
+	}
+	f.startup = text
+	f.startupGen++
+}
+
+// startupText is the editor's startup commands as saved: one per line,
+// without the blank lines.
+func startupText(f *hostForm) string { return strings.Join(assets.StartupLines(f.startup), "\n") }
+
+// startupChanges are what saving h does to its startup commands: write
+// them when they are new or changed, delete them when they are gone.
+func startupChanges(f *hostForm, h assets.Host) []keychain.Change {
+	key := keychain.HostStartup(h.ID)
+	text := startupText(f)
+	switch {
+	case h.Startup && (f.isNew || !f.orig.Startup || text != strings.Join(assets.StartupLines(f.startupOrig), "\n")):
+		return []keychain.Change{{Key: key, Value: []byte(text)}}
+	case !h.Startup && f.orig.Startup && !f.isNew:
+		return []keychain.Change{{Key: key, Delete: true}}
+	}
+	return nil
+}
+
 // encodingField is the output encoding the host's new terminals start
 // with; each open terminal still switches its own.
 func encodingField(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hostForm) {
@@ -661,6 +799,20 @@ func encodingField(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hostF
 				}
 			}
 			ui.Text(c, m.TerminalEncodingHint()).FontSize(theme.Caption).TextColor(tok.TextMuted)
+		})
+	})
+}
+
+// fileProtocols are the choices of fileProtocolField, in order.
+var fileProtocols = []assets.FileProtocol{assets.FileAuto, assets.FileSFTP, assets.FileSCP}
+
+// fileProtocolField is how the host's files panes reach its files.
+func fileProtocolField(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hostForm) {
+	ui.Field(c, m.FileProtocol(), func() {
+		ui.Column(c).Gap(4).FillWidth().Children(func() {
+			formSegmented(c.Key("f:fproto"), &f.fileProtoIdx, false, m.FileProtocolAuto(), "SFTP", "SCP").Label(m.FileProtocol())
+			hint := []string{m.FileProtocolAutoHint(), m.FileProtocolSftpHint(), m.FileProtocolScpHint()}[f.fileProtoIdx]
+			ui.Text(c, hint).FontSize(theme.Caption).TextColor(tok.TextMuted)
 		})
 	})
 }
@@ -683,6 +835,21 @@ func sessionLogField(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hos
 		ui.Column(c).Gap(4).FillWidth().Children(func() {
 			formCheckbox(c.Key("f:log"), &f.sessionLog, m.LogAuto())
 			ui.Text(c, m.LogAutoHint()).FontSize(theme.Caption).TextColor(tok.TextMuted)
+		})
+	})
+}
+
+// transfersField lets the host's terminals take ZMODEM and trzsz
+// transfers, which the global setting turned off turns off for all.
+func (a *App) transfersField(c *ui.Context, m locales.Messages, tok theme.Tokens, f *hostForm) {
+	ui.Field(c, m.TermXferSection(), func() {
+		ui.Column(c).Gap(4).FillWidth().Children(func() {
+			formCheckbox(c.Key("f:xfer"), &f.transfers, m.TermXferHost())
+			hint := m.TermXferHostHint()
+			if !a.settings.TerminalTransfers {
+				hint = m.TermXferDisabledGlobally()
+			}
+			ui.Text(c, hint).FontSize(theme.Caption).TextColor(tok.TextMuted)
 		})
 	})
 }

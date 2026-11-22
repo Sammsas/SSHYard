@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/url"
 	"os"
@@ -36,7 +37,10 @@ type acpRuntime struct {
 	runner  *remote.Runner
 	release func()
 	done    func()
-	report  func(error)
+	// gone publishes the cleanup result after the process and its remote
+	// resources have been closed.
+	gone     chan struct{}
+	closeErr error
 }
 
 type acpFailure struct {
@@ -57,6 +61,7 @@ func (r *acpRuntime) close() {
 	r.once.Do(func() {
 		go func() {
 			defer r.done()
+			defer close(r.gone)
 			<-r.ready
 			release := func() {
 				if r.release != nil {
@@ -67,29 +72,57 @@ func (r *acpRuntime) close() {
 			go func() {
 				var cleanup error
 				if r.session != nil {
-					cleanup = errors.Join(r.session.Stop(), r.session.Close())
+					cleanup = r.session.Close()
 				}
 				if r.files != nil {
-					cleanup = errors.Join(cleanup, r.files.Close())
+					// The SFTP writer can already be closed when its SSH
+					// channel closes, in which case its Close returns EOF.
+					if err := r.files.Close(); err != io.EOF {
+						cleanup = errors.Join(cleanup, err)
+					}
 				}
 				cleaned <- cleanup
 			}()
-			var cleanup error
 			select {
-			case cleanup = <-cleaned:
+			case r.closeErr = <-cleaned:
 			case <-time.After(acpCloseGrace):
 				// A host that stopped answering keeps the SFTP session and
 				// the agent's requests waiting for replies that never come;
 				// letting go of the connection ends them.
 				release()
-				cleanup = <-cleaned
+				r.closeErr = <-cleaned
 			}
 			release()
-			if cleanup != nil && r.report != nil {
-				r.report(cleanup)
-			}
 		}()
 	})
+}
+
+func (a *App) closeACP(c *conn) {
+	state := c.ai
+	r := state.acp
+	if r == nil {
+		return
+	}
+	r.close()
+	state.acp = nil
+	r.mu.Lock()
+	turnOwnsClose := r.cancel != nil
+	r.mu.Unlock()
+	if state.running && turnOwnsClose {
+		return // The active turn reports the cleanup result.
+	}
+	turn := state.turn
+	go func() {
+		<-r.gone
+		if r.closeErr == nil {
+			return
+		}
+		a.post(func() {
+			if !a.closing && a.conns[c.id] == c && c.ai == state && state.acpLast == r && state.turn == turn {
+				state.items = append(state.items, aiItem{kind: "err", text: "acp-close"})
+			}
+		})
+	}()
 }
 
 // acpCloseGrace is how long closing waits for the agent and the SFTP
@@ -113,7 +146,6 @@ func (a *App) waitACP() {
 }
 
 func (r *acpRuntime) start(ctx context.Context, a *App, cfg session.Config, key, agent string, options acp.Config) error {
-	defer close(r.ready)
 	locateACP(ctx, agent, &options)
 	client, release, err := a.pool.Acquire(ctx, key, cfg)
 	if err != nil {
@@ -175,6 +207,7 @@ func locateACP(ctx context.Context, agent string, options *acp.Config) {
 }
 
 func (a *App) sendACP(c *conn, text string, files []*aiAttach) {
+	state := c.ai
 	acpCfg, ok := a.settings.ACP(c.ai.agent)
 	if !ok || strings.TrimSpace(acpCfg.Command) == "" {
 		c.ai.items = append(c.ai.items, aiItem{kind: "err", text: "acp-start"})
@@ -184,16 +217,22 @@ func (a *App) sendACP(c *conn, text string, files []*aiAttach) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := c.ai.acp
 	fresh := r == nil
+	// A new process loads the session that carried the conversation on,
+	// once the last one has let go of its sandbox; if it cannot, it is
+	// told the conversation again, once.
+	var resume acp.Resume
+	var prev *acpRuntime
+	earlier := ""
+	backend := c.ai.agent
 	if fresh {
-		a.acpWG.Add(1)
-		r = &acpRuntime{ready: make(chan struct{}), done: a.acpWG.Done}
-		r.report = func(err error) {
-			a.post(func() {
-				if current := a.conns[c.id]; !a.closing && current != nil && current.ai != nil {
-					current.ai.items = append(current.ai.items, aiItem{kind: "err", text: "acp-close"})
-				}
-			})
+		if c.ai.acpSID != "" && c.ai.acpAgent == backend {
+			resume = acp.Resume{ID: c.ai.acpSID, Cwd: c.ai.acpCwd}
 		}
+		prev = c.ai.acpLast
+		earlier = acpTranscript(c.ai.items, replayMax)
+		a.acpWG.Add(1)
+		r = &acpRuntime{ready: make(chan struct{}), done: a.acpWG.Done, gone: make(chan struct{})}
+		c.ai.acpLast = r
 		c.ai.acp = r
 		c.ai.acpOpts = nil
 	}
@@ -206,7 +245,7 @@ func (a *App) sendACP(c *conn, text string, files []*aiAttach) {
 		gate = a.aiGate(c)
 	}
 	agentID := acpCfg.Agent
-	options := acp.Config{Command: acpCfg.Command, Args: append([]string(nil), acpCfg.Args...), Type: detect.Type(agentID), Gate: gate, Redact: a.settings.AIRedact}
+	options := acp.Config{Command: acpCfg.Command, Args: append([]string(nil), acpCfg.Args...), Type: detect.Type(agentID), Gate: gate, Redact: a.settings.AIRedact, Resume: resume}
 	prefer := maps.Clone(acpCfg.Options)
 	id := c.id
 	c.ai.turn++
@@ -214,7 +253,7 @@ func (a *App) sendACP(c *conn, text string, files []*aiAttach) {
 	options.OnUpdate = func(update acp.Update) {
 		a.post(func() {
 			current := a.conns[id]
-			if current != nil && current.ai != nil && current.ai.acp == r {
+			if current == c && current.ai == state && state.acp == r {
 				a.onACPUpdate(current, update)
 			}
 		})
@@ -234,6 +273,7 @@ func (a *App) sendACP(c *conn, text string, files []*aiAttach) {
 		}
 	}
 	c.ai.items = append(c.ai.items, aiItem{kind: "user", text: text, files: files})
+	c.ai.turnStart = len(c.ai.items)
 	c.ai.input = ""
 	c.ai.attach = nil
 	c.ai.task = text
@@ -245,15 +285,29 @@ func (a *App) sendACP(c *conn, text string, files []*aiAttach) {
 	a.aiRecent[host.ID] = id
 	go func() {
 		defer cancel()
+		stopClose := context.AfterFunc(ctx, r.close)
 		var err error
 		if fresh {
-			err = r.start(ctx, a, cfg, key, agentID, options)
+			if prev != nil {
+				select {
+				case <-prev.gone:
+				case <-ctx.Done():
+					err = ctx.Err()
+				}
+			}
+			if err == nil {
+				err = r.start(ctx, a, cfg, key, agentID, options)
+			}
+			close(r.ready)
+			if err == nil && earlier != "" && !r.session.Resumed() {
+				resources = append([]acp.Resource{{URI: "sshyard://conversation", Text: earlier}}, resources...)
+			}
 			if err == nil {
 				// A choice that fails to apply leaves the agent's own value.
 				_ = r.session.Prefer(ctx, prefer)
 				opts := r.session.Options()
 				a.post(func() {
-					if current := a.conns[id]; current != nil && current.ai != nil && current.ai.acp == r {
+					if current := a.conns[id]; current == c && current.ai == state && state.acp == r {
 						a.setACPOptions(current, opts)
 					}
 				})
@@ -273,24 +327,46 @@ func (a *App) sendACP(c *conn, text string, files []*aiAttach) {
 				}
 			}
 		}
-		if ctx.Err() != nil {
-			if err == nil || onlyAICancellation(err) {
+		r.mu.Lock()
+		closing := !stopClose() || err != nil
+		if !closing {
+			r.cancel = nil
+		}
+		r.mu.Unlock()
+		// A successful Prompt has finished even when cancellation arrived
+		// just after it returned. Keep its reply, but finish any cleanup
+		// already started before handing over the conversation.
+		if err != nil && ctx.Err() != nil {
+			if onlyAICancellation(err) {
 				err = ctx.Err()
 			} else {
 				err = &acpFailure{"close", err}
 			}
 		}
-		if err != nil {
+		sid, sandbox := "", ""
+		if r.session != nil {
+			sid, sandbox = r.session.ID(), r.session.Sandbox()
+		}
+		if closing {
 			r.close()
+			<-r.gone
+			if r.closeErr != nil {
+				err = &acpFailure{"close", errors.Join(err, r.closeErr)}
+			}
 		}
 		a.post(func() {
 			current := a.conns[id]
-			if current == nil || current.ai == nil || current.ai.turn != turn {
+			if current != c || current.ai != state || state.turn != turn {
 				return
 			}
-			if err != nil && current.ai.acp == r {
+			if closing && current.ai.acp == r {
 				current.ai.acp = nil
 			}
+			if sid != "" {
+				current.ai.acpSID, current.ai.acpAgent, current.ai.acpCwd = sid, backend, sandbox
+			}
+			// The built-in agent's messages no longer hold all of it.
+			current.ai.msgs = nil
 			a.onAIDone(id, err)
 		})
 	}()
@@ -304,7 +380,7 @@ func (a *App) onACPUpdate(c *conn, u acp.Update) {
 		a.onAIEvent(c.id, agent.Event{Kind: agent.EventThinking, Text: u.Text})
 	case "plan":
 		for _, line := range u.Plan {
-			c.ai.items = append(c.ai.items, aiItem{kind: "think", text: line.Content})
+			a.onAIEvent(c.id, agent.Event{Kind: agent.EventThinking, Text: line.Content + "\n"})
 		}
 	case "tool":
 		if u.Tool == nil {
@@ -328,7 +404,7 @@ func (a *App) onACPUpdate(c *conn, u acp.Update) {
 		}
 		card.Diff = v.Diff
 		// Tool updates omit unchanged fields; keep the initial title/path/diff
-		for _, item := range c.ai.items {
+		for _, item := range c.ai.items[c.ai.turnStart:] {
 			if item.kind == "tool" && item.tool.ID == card.ID {
 				if card.Name == "" {
 					card.Name = item.tool.Name
@@ -352,13 +428,15 @@ func (a *App) onACPUpdate(c *conn, u acp.Update) {
 	case "notice":
 		c.ai.items = append(c.ai.items, aiItem{kind: "err", text: u.Text})
 	case "error":
-		a.StopAI(c.id)
-		c.ai.items = append(c.ai.items, aiItem{kind: "err", text: "acp-session"})
+		if !c.ai.running {
+			a.StopAI(c.id)
+			c.ai.items = append(c.ai.items, aiItem{kind: "err", text: "acp-session"})
+		}
 	}
 }
 
 func (a *App) setAIAgent(c *conn, backend string) {
-	if c.ai.agent == backend {
+	if c.ai.agent == backend || c.ai.interrupting {
 		return
 	}
 	a.invalidateAI(c)

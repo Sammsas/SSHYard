@@ -106,6 +106,8 @@ type Session struct {
 	target   Target
 	msgs     []llm.Message
 	hostSent bool
+	// termUser is the HostMeta.TermUser the model was last told of.
+	termUser string
 	// used counts the tool calls of the turn so far; limit is how many it
 	// may run in all, raised by maxCalls on each Continue; maxCalls is the
 	// calls one stretch grants, 0 for no limit at all.
@@ -161,8 +163,40 @@ func (s *Session) Configure(gate policy.Gate, redact bool, maxToolCalls *int) {
 // Paused reports whether the session is waiting for Continue.
 func (s *Session) Paused() bool { return s.paused }
 
+// AbandonPause ends an idle paused turn without running its remaining calls.
+func (s *Session) AbandonPause() {
+	if s.paused {
+		s.cancelRest("cancelled")
+		s.paused = false
+	}
+}
+
+// InterruptTurn removes the interrupted reply from an idle session, keeping
+// tool calls and results paired along with any required provider state.
+func (s *Session) InterruptTurn() {
+	s.AbandonPause()
+	for i := len(s.msgs) - 1; i >= 0; i-- {
+		if s.msgs[i].Role != "user" {
+			continue
+		}
+		keep := s.msgs[:i+1]
+		for _, m := range s.msgs[i+1:] {
+			if m.Role == "assistant" {
+				if len(m.ToolCalls) == 0 {
+					continue
+				}
+				m.Content = ""
+			}
+			keep = append(keep, m)
+		}
+		clear(s.msgs[len(keep):])
+		s.msgs = keep
+		return
+	}
+}
+
 // Turn sends one user message. terminal, when set, is attached as untrusted
-// data. A paused session refuses until Continue.
+// data. A paused session refuses until Continue or AbandonPause.
 func (s *Session) Turn(ctx context.Context, user string, meta HostMeta, terminal string, emit func(Event)) error {
 	return s.TurnWith(ctx, user, nil, meta, terminal, emit)
 }
@@ -181,7 +215,10 @@ func (s *Session) TurnWith(ctx context.Context, user string, parts []llm.Part, m
 	}
 	if !s.hostSent {
 		s.msgs = append(s.msgs, llm.Message{Role: "system", Content: s.mask(hostMessageFor(s.target, meta))})
-		s.hostSent = true
+		s.hostSent, s.termUser = true, meta.TermUser
+	} else if meta.TermUser != s.termUser {
+		s.msgs = append(s.msgs, llm.Message{Role: "system", Content: s.mask(termUserNote(s.target, meta, true))})
+		s.termUser = meta.TermUser
 	}
 	text := user
 	if terminal != "" {
@@ -212,6 +249,43 @@ func (s *Session) Continue(ctx context.Context, emit func(Event)) error {
 		s.limit = 0 // no limit at all: every remaining call runs
 	} else {
 		s.limit = s.used + s.maxCalls
+	}
+	if err := s.drain(ctx, emit); err != nil {
+		return err
+	}
+	return s.loop(ctx, emit)
+}
+
+// CanRetry reports whether the last turn stopped short of the model's
+// reply, as when the provider failed or could not be reached: the
+// conversation ends with the question or a tool's result.
+func (s *Session) CanRetry() bool {
+	if s.paused {
+		return false
+	}
+	if len(s.pending) > 0 {
+		return true
+	}
+	for i := len(s.msgs) - 1; i >= 0; i-- {
+		switch s.msgs[i].Role {
+		case "system":
+			continue
+		case "user", "tool":
+			return true
+		}
+		return false
+	}
+	return false
+}
+
+// Retry carries on a turn that failed (CanRetry): the tool calls left
+// over run, then the model is asked again. It does nothing otherwise.
+func (s *Session) Retry(ctx context.Context, emit func(Event)) error {
+	if !s.CanRetry() {
+		return nil
+	}
+	if s.model == nil || s.gate == nil {
+		return errors.New("agent: not configured")
 	}
 	if err := s.drain(ctx, emit); err != nil {
 		return err
@@ -408,19 +482,20 @@ func (s *Session) execOne(ctx context.Context, call llm.ToolCall, emit func(Even
 	start := time.Now()
 	out, exitCode, callErr := s.tools.Call(ctx, call.Name, json.RawMessage(raw))
 	dur := time.Since(start).Milliseconds()
-	if callErr != nil && (ctx.Err() != nil || errors.Is(callErr, context.Canceled) || errors.Is(callErr, context.DeadlineExceeded)) {
+	ctxErr := ctx.Err()
+	if callErr != nil && (ctxErr != nil || errors.Is(callErr, context.Canceled) || errors.Is(callErr, context.DeadlineExceeded)) {
 		// Stop, Stop all, and the runner timeout share this path; the command already started.
 		auditErr := s.gate.Done(act, verdict, -1, dur, countedBytes(s.tools, out))
 		card.Phase, card.Status = "done", "cancel"
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(callErr, context.DeadlineExceeded) {
+		if errors.Is(ctxErr, context.DeadlineExceeded) || ctxErr == nil && errors.Is(callErr, context.DeadlineExceeded) {
 			card.Status = "timeout"
 		}
 		card.Output, card.DurMS = truncOut(out), dur
 		s.emitTool(emit, card)
 		_ = s.auditLost(emit, auditErr)
 		s.dropCall(call.ID)
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if ctxErr != nil && !errors.Is(callErr, ctxErr) {
+			return errors.Join(ctxErr, callErr)
 		}
 		return callErr
 	}

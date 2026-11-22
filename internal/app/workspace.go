@@ -9,6 +9,7 @@ import (
 	"github.com/Licoy/sshyard/internal/layout"
 	"github.com/Licoy/sshyard/internal/session"
 	"github.com/Licoy/sshyard/internal/settings"
+	"github.com/Licoy/sshyard/internal/sftpsvc"
 	"github.com/Licoy/sshyard/internal/theme"
 	"github.com/Licoy/sshyard/internal/vt"
 	"github.com/Licoy/sshyard/locales"
@@ -89,7 +90,8 @@ func stateColor(tok theme.Tokens, st session.State) ui.Color {
 	return tok.TextMuted
 }
 
-// tabLabel names a tab by its focused pane's host.
+// tabLabel names a tab by its focused pane: its host, or what its
+// terminal reported as the settings choose (tabName).
 func (a *App) tabLabel(t *layout.Tab) string {
 	if t.Title != "" {
 		return t.Title
@@ -98,10 +100,14 @@ func (a *App) tabLabel(t *layout.Tab) string {
 	if cn == nil {
 		return ""
 	}
-	if n := len(t.Panes()); n > 1 {
-		return a.connLabel(cn) + " +" + strconv.Itoa(n-1)
+	name := a.connLabel(cn)
+	if src := a.tabSource(cn); src != "" {
+		name = tabName("", a.settings.TabTitle, name, src, a.termHomes(cn)...)
 	}
-	return a.connLabel(cn)
+	if n := len(t.Panes()); n > 1 {
+		return name + " +" + strconv.Itoa(n-1)
+	}
+	return name
 }
 
 // kindIcon is the icon of a pane kind, the "-fill" one when on.
@@ -211,11 +217,15 @@ func tempBadge(c *ui.Context, m locales.Messages, tok theme.Tokens) {
 	})
 }
 
-// scpBadge marks a files pane on a server without SFTP, whose files move
-// with scp and its shell.
-func scpBadge(c *ui.Context, m locales.Messages, tok theme.Tokens) {
+// scpBadge marks a files pane whose files move with scp and the server's
+// shell: the server has no SFTP, or chosen when the host was set to scp.
+func scpBadge(c *ui.Context, m locales.Messages, tok theme.Tokens, chosen bool) {
+	note := m.ScpFallbackNote()
+	if chosen {
+		note = m.ScpChosenNote()
+	}
 	ui.Box(c.Key("scp")).Shrink(0).Padding(1, 6).Radius(theme.Capsule).Background(tok.Warning.Alpha(0.14)).
-		Label(m.ScpFallbackNote()).Tooltip(m.ScpFallbackNote()).Children(func() {
+		Label(note).Tooltip(note).Children(func() {
 		ui.Text(c, "SCP").FontSize(theme.Caption).FontWeight(500).TextColor(tok.Warning).SingleLine()
 	})
 }
@@ -469,7 +479,7 @@ func (a *App) paneView(c *ui.Context, t *layout.Tab, n *layout.Node, tok theme.T
 						tempBadge(c, m, tok)
 					}
 					if cn.fs != nil && cn.fs.remote.client != nil && cn.fs.remote.client.SCP() {
-						scpBadge(c, m, tok)
+						scpBadge(c, m, tok, cn.fs.remote.client.Protocol() == sftpsvc.SCPOnly)
 					}
 					if cn.kind == layout.Terminal {
 						a.paneForwards(c, m, tok, cn.host.ID)
@@ -487,6 +497,7 @@ func (a *App) paneView(c *ui.Context, t *layout.Tab, n *layout.Node, tok theme.T
 				a.filesBody(c, t, n, cn, pane.Bounds().W, tok, m)
 			default:
 				a.termElement(c, t, n, cn, &pal, m)
+				a.xferBanner(c, cn, tok, m)
 				if st.State == session.Connected {
 					h := cn.host
 					if cur, ok := a.host(cn.host.ID); ok {
@@ -607,7 +618,8 @@ func (a *App) termElement(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn
 		}
 		tv.local = isLocal(cn.host.ID)
 		// Files dropped on a local terminal type their paths at its prompt,
-		// as macOS Terminal does; a remote one takes none.
+		// as macOS Terminal does; on a remote one they are sent with rz or
+		// trz, as the user chooses.
 		if tv.local {
 			if files := term.DroppedFiles(); len(files) > 0 {
 				// pasteNow writes to this terminal alone, never to those typed
@@ -617,6 +629,11 @@ func (a *App) termElement(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn
 				}
 				t.Focus = n.ID
 				a.focusReq = cn.id
+			}
+		} else if a.settings.TerminalTransfers && cn.s.Status().State == session.Connected {
+			if files := term.DroppedFiles(); len(files) > 0 {
+				a.dropOnRemote(cn, files)
+				t.Focus = n.ID
 			}
 		}
 		has := term.Focused()
@@ -655,6 +672,11 @@ func (a *App) termElement(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn
 			tv.rightClick, tv.copyOnSelect = a.settings.TerminalRightClick, a.settings.CopyOnSelect
 			tv.openLink = svc.OpenURL
 			tv.zoomFont = a.stepTermFont
+			// While a transfer has the shell, Ctrl+C stops it and the other
+			// keys go nowhere.
+			if a.xferKey(cn, ev) {
+				return true
+			}
 			// A program reading the mouse takes the right click too.
 			return tv.input(ev, svc) || a.contextPress(tb, ev, entries)
 		})
@@ -673,6 +695,7 @@ func (a *App) termElement(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn
 		}
 		tv.clear = a.clearContent
 		tv.hl, tv.hlOverride, tv.hlFullScreen = a.highlighter(), a.settings.Highlight.Override, a.settings.Highlight.FullScreen
+		a.suggestFrame(c, cn, has, tb, m)
 		term.Draw(func(p *ui.Painter, r ui.Rect) { tv.paint(p, r, pal, has) })
 		a.termAutocompleteView(c, cn, tv, tb, t.Focus == n.ID && a.page == pageWorkspace, currentTokens(c))
 	})

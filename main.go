@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -10,13 +12,17 @@ import (
 	"time"
 
 	"github.com/Licoy/sshyard/internal/app"
+	"github.com/Licoy/sshyard/internal/awake"
 	"github.com/Licoy/sshyard/internal/gtkfix"
 	"github.com/Licoy/sshyard/internal/keychain"
 	"github.com/Licoy/sshyard/internal/macfix"
+	"github.com/Licoy/sshyard/internal/netwatch"
+	"github.com/Licoy/sshyard/internal/portable"
 	"github.com/Licoy/sshyard/internal/settings"
 	"github.com/Licoy/sshyard/internal/theme"
 	"github.com/Licoy/sshyard/internal/updater"
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -36,11 +42,16 @@ func platform() app.Platform {
 		Post:           postUI,
 		ResolveStorage: storagePaths,
 		Version:        mygo.App.Version(),
+		Storage:        storage,
+		CacheDir:       cacheDir,
 		Secrets:        keychain.System{},
 		Updates:        updater.MygoBackend{},
 		SetTheme:       func(m theme.Mode) { mygo.Theme.SetSource(themeSource(m)) },
 		SetLocale:      mygo.App.SetLocale,
 		OpenPath:       mygo.Shell.OpenPath,
+		CopySecret: func(text string) error {
+			return mygo.Clipboard.Write(transfer.TextData(text), mygo.ClipboardOptions{Concealed: true})
+		},
 		PickFile: func(title string) (string, error) {
 			paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: title, ShowHiddenFiles: true})
 			if err != nil || len(paths) == 0 {
@@ -61,9 +72,72 @@ func platform() app.Platform {
 			}
 			return paths[0], nil
 		},
-		OpenWith:   openWith,
-		OpenWindow: openWindow,
+		OpenWith:     openWith,
+		OpenWindow:   openWindow,
+		WatchNetwork: netwatch.Watch,
+		Awake:        awake.System(),
+		WatchSleep:   watchSleep,
 	}
+}
+
+// watchSleep calls fn as the screen locks or the computer goes to sleep.
+func watchSleep(fn func()) (stop func()) {
+	offLock := mygo.Power.OnLockScreen(fn)
+	offSleep := mygo.Power.OnSuspend(fn)
+	return func() {
+		offLock()
+		offSleep()
+	}
+}
+
+// storage is where the data of this copy may move, nil where it cannot;
+// cacheDir is where a portable copy copies the files it opens in other
+// apps. setupStorage sets them before the app runs.
+var (
+	storage  *app.Storage
+	cacheDir string
+)
+
+// setupStorage keeps the data of a portable copy beside its executable,
+// in place of the user's application data, after making the move the
+// last launch asked for (portable.Apply).
+func setupStorage() {
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" || os.Getenv("SSHYARD_DATA_DIR") != "" {
+		return
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	config, cerr := os.UserConfigDir()
+	if err != nil || cerr != nil {
+		return
+	}
+	dir, appData := filepath.Dir(exe), filepath.Join(config, mygo.App.Name())
+	// The copy that asked quits as this one starts: wait for its lock.
+	moveErr := portable.Apply(dir, appData, 15*time.Second)
+	if moveErr != nil {
+		log.Printf("sshyard: data move failed: %v", moveErr)
+	}
+	here := portable.Active(runtime.GOOS, dir)
+	if here {
+		d := portable.Path(dir)
+		mygo.App.SetPath(mygo.PathUserData, d)
+		mygo.App.SetPath(mygo.PathCache, filepath.Join(d, "cache"))
+		mygo.App.SetPath(mygo.PathLogs, filepath.Join(d, "logs"))
+		cacheDir = filepath.Join(d, "cache", "open")
+	}
+	if !portable.Supported(runtime.GOOS, dir) {
+		return
+	}
+	storage = &app.Storage{Portable: here, PortableDir: portable.Path(dir), AppDataDir: appData, MoveErr: moveErr,
+		Move: func() error {
+			if err := portable.Request(dir, !here); err != nil {
+				return err
+			}
+			mygo.App.Relaunch()
+			return nil
+		}}
 }
 
 func storagePaths() (app.StoragePaths, error) {
@@ -120,6 +194,7 @@ func appMenu() *mygo.Menu {
 }
 
 func main() {
+	setupStorage()
 	mygo.Use(updatePlugin())
 	if runtime.GOOS == "darwin" {
 		mygo.App.SetMenu(appMenu())
@@ -134,13 +209,14 @@ func main() {
 		p := platform()
 		p.SetTrayIcon = func(style string) error { return d.setTrayIcon(style) }
 		p.SetRememberLayout = changeRememberLayout
-		p.Notify = func(id, title, body string, clicked func()) error {
-			n := mygo.NewNotification(mygo.NotificationOptions{ID: id, Title: title, Body: body})
-			n.OnClick(func() {
-				postUI(d.show)
-				clicked()
-			})
-			return n.Show()
+		p.Notify = showNotification
+		p.Relaunch = func() { mygo.App.Relaunch() }
+		p.MainWindowBackground = func() bool {
+			return d != nil && (!mygo.App.IsActive() || !d.window.IsFocused() || !d.window.IsVisible() || d.window.IsMinimized())
+		}
+		p.ActivateMainWindow = func() {
+			d.show()
+			d.window.Focus()
 		}
 		a, _ := app.New(p)
 		installWindowStates(a)
@@ -175,7 +251,13 @@ func main() {
 		d = newDesktop(a, w)
 		a.Start()
 		go updater.CleanLeftovers()
-		w.OnMinimize(func() { a.SetMinimized(true) })
+		mygo.App.OnDidResignActive(a.NotifyPendingApprovals)
+		w.OnBlur(a.NotifyPendingApprovals)
+		w.OnHide(a.NotifyPendingApprovals)
+		w.OnMinimize(func() {
+			a.SetMinimized(true)
+			a.NotifyPendingApprovals()
+		})
 		w.OnRestore(func() { a.SetMinimized(false) })
 		if ownWindowButtons() {
 			// Off the frame that clicked them: closing the window there
@@ -194,4 +276,22 @@ func main() {
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func showNotification(ctx context.Context, note app.Notification) (func(), error) {
+	n := mygo.NewNotification(mygo.NotificationOptions{ID: note.ID, Title: note.Title, Body: note.Body})
+	if note.OnClick != nil {
+		n.OnClick(note.OnClick)
+	}
+	if err := n.ShowContext(ctx); err != nil {
+		// Remove the request from the native authorization queue, too.
+		if ctx.Err() != nil {
+			n.Close()
+		}
+		if errors.Is(err, mygo.ErrNotificationsDenied) {
+			return nil, app.ErrNotificationsDenied
+		}
+		return nil, err
+	}
+	return n.Close, nil
 }

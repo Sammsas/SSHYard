@@ -62,7 +62,7 @@ func (s *Session) connectStream(open func(cols, rows int) (Stream, error), lg *l
 		return context.Canceled
 	}
 	out := &streamOut{done: make(chan struct{})}
-	in := &serializedInput{WriteCloser: p}
+	in := &serializedInput{WriteCloser: p, enters: &s.enters}
 	if !s.opts.Local {
 		in.WriteCloser = &streamInput{Stream: p, newline: newline(s.opts.NewLine), echo: s.echoer()}
 		in.reply = p
@@ -124,6 +124,7 @@ func (s *Session) serveStream(ctx context.Context, p Stream) error {
 	case <-ctx.Done():
 	}
 	stop()
+	s.endTakeover()
 	s.Term.ResetInputModes(false)
 	p.Close()
 	<-out.done

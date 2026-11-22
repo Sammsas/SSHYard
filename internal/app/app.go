@@ -6,6 +6,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"github.com/Licoy/sshyard/internal/ai/history"
 	"github.com/Licoy/sshyard/internal/ai/policy"
 	"github.com/Licoy/sshyard/internal/assets"
+	"github.com/Licoy/sshyard/internal/awake"
 	"github.com/Licoy/sshyard/internal/forward"
 	"github.com/Licoy/sshyard/internal/highlight"
 	"github.com/Licoy/sshyard/internal/keychain"
@@ -55,15 +57,25 @@ type Platform struct {
 	// SetRememberLayout changes native geometry persistence; errors leave it unchanged.
 	// A successful change returns an undo that restores its exact previous state.
 	SetRememberLayout func(bool) (undo func() error, err error)
+	// CopySecret puts a secret on the clipboard marked as confidential, so
+	// clipboard histories and other devices leave it out; nil copies it as
+	// any text.
+	CopySecret func(text string) error
 	// OpenPath opens a file in its default app; nil can't.
 	OpenPath func(path string) error
-	// Notify shows a system notification, replacing the one of the same
-	// id, and calls clicked as it is clicked; it may block, and is never
-	// called on a frame. nil can't.
-	Notify func(id, title, body string, clicked func()) error
+	// Notify shows a system notification and returns how to withdraw it.
+	// The context cancels delivery, including any wait for permission. This
+	// hook runs off the UI thread. A nil hook means notifications are unavailable.
+	Notify func(context.Context, Notification) (withdraw func(), err error)
+	// MainWindowBackground and ActivateMainWindow run on the UI thread.
+	MainWindowBackground func() bool
+	ActivateMainWindow   func()
 	// CacheDir is where files opened in another app are copied, the
 	// user's cache folder when "".
 	CacheDir string
+	// Storage is where the data may move, nil where it cannot (macOS,
+	// installed copies, a data folder set from outside).
+	Storage *Storage
 	// DataDir holds application metadata and encrypted credentials; it is required
 	// unless ResolveStorage supplies the persistent storage paths.
 	DataDir string
@@ -103,6 +115,19 @@ type Platform struct {
 	// LocalUser is the login name a host without one defaults to, as ssh
 	// does; "" is the user running the app.
 	LocalUser string
+	// WatchNetwork calls changed, on any goroutine, each time this
+	// computer's network changes or it wakes from sleep, until ctx ends
+	// (netwatch.Watch); nil tells nothing.
+	WatchNetwork func(ctx context.Context, changed func())
+	// Awake is the system's hold that keeps the computer from sleeping
+	// while files transfer (awake.System); nil holds nothing.
+	Awake awake.Backend
+	// WatchSleep calls fn, on any goroutine, each time the screen locks
+	// or the computer goes to sleep, until stop; nil tells nothing.
+	WatchSleep func(fn func()) (stop func())
+	// Relaunch quits the app and starts it again, unless the quit is
+	// cancelled; nil can't.
+	Relaunch func()
 }
 
 // WindowSpec is a window the app opens beside the main one.
@@ -179,11 +204,22 @@ type conn struct {
 	probeConn int
 	probeAt   time.Time
 	probeMiss int
+	// enterSeen is the shell's Enters as last seen, at enterAt, and
+	// probeEnters as the last read started: an Enter since is read again
+	// soon (probeAfterEnter). probeRTT is the quickest read of the
+	// connect but its first (which starts the probe shell), probeOK how
+	// many reads found the directory.
+	enterSeen   uint64
+	enterAt     time.Time
+	probeEnters uint64
+	probeRTT    time.Duration
+	probeOK     int
 	// start is what an SSH terminal's shell is given each time it starts
 	// (see shellStart); tmuxConn is the connect it was last seen at,
 	// tmuxUp when, and tmuxAt when the tmux session the terminal is in
 	// was last read (tmuxReading while it is); see watchTmux
 	start       *shellStart
+	container   bool // a container's shell, whose files are not the host's: none listed
 	tmuxConn    int
 	tmuxUp      time.Time
 	tmuxAt      time.Time
@@ -220,6 +256,8 @@ type conn struct {
 	log      *termlog.Recorder
 	logConns int
 	autoLog  bool
+	// xfer is a terminal's ZMODEM and trzsz transfers (armTransfers).
+	xfer *xferPane
 }
 
 func (c *conn) item() layout.Item { return layout.Item{Kind: c.kind, ID: c.id} }
@@ -276,6 +314,12 @@ type App struct {
 	nextConn int
 	// pool shares one authenticated connection per host among its panes
 	pool *session.Pool
+	// netStop stops telling of network changes; probing is set while the
+	// pool's connections are checked after one (see netchange.go)
+	netStop context.CancelFunc
+	probing atomic.Bool
+	// awake keeps the computer from sleeping while files transfer
+	awake *awake.Keeper
 	// typed are the secrets typed this run and never saved, by
 	// promptKey: an "ask" host's password, a passphrase asked each run, a
 	// password typed after the saved one was refused. Under mu:
@@ -342,15 +386,20 @@ type App struct {
 	docker      *dockerState
 	tmux        *tmuxState
 	hist        *historyState
-	selected    string // host chosen in the sidebar
+	sug         *suggestState // what the terminals complete from
+	listAsk     int           // the pane whose path list its shortcut asked for, 0 none
+	selected    string        // host chosen in the sidebar
 	search      string
 	searchFocus bool // the search, its field or button, takes the focus next frame
 	searchOpen  bool // the search shows its field across the toolbar
+	// newTabQuery is the search of the "+" menu's hosts, while it shows.
+	newTabQuery string
 	// ping is the hosts' latency the sidebar shows
 	ping pingState
 	// multi is the sidebar choosing several hosts and groups
 	multi       multiSelect
 	sections    map[string]*bool
+	locate      hostLocate // the host revealed in the sidebar, blinking
 	form        *hostForm
 	editing     bool
 	deleting    bool
@@ -415,10 +464,17 @@ type App struct {
 	filesEdgeChoice          int // where a files pane opens, by index
 	toolPanesChoice          int // how the rail opens its tools, by index
 	rightClickChoice         int // what a terminal's right click does, by index
+	completionChoice         int // how a terminal completes, by index
 	chromeMat, contentMat    int // the materials chosen, by materials' index
 	osc52KiB                 float64
 	clip                     clipGate
 	clipAsk                  *oscAsk
+	// xfer is the questions of the terminals' transfers, and xferOn
+	// settings.TerminalTransfers, read off the UI thread.
+	xfer   xferState
+	xferOn atomic.Bool
+	// returnDirOn is settings.ReturnToFolder, read off the UI thread.
+	returnDirOn atomic.Bool
 	// sbWidth is the sidebar's width; sbSeen and sbAt are its value last
 	// seen and since when, to save it once it rests.
 	sbWidth, sbSeen float32
@@ -428,6 +484,8 @@ type App struct {
 	// seen and since when, to save it once it rests.
 	filesSplit, splitSeen float32
 	splitAt               time.Time
+	// fileClip is what Copy took on a side of a files pane, for Paste.
+	fileClip *fileClip
 	// winSvc are the services of the editor windows, by their conn,
 	// which invalidate redraws too. Under mu.
 	winSvc map[int]ui.Services
@@ -442,6 +500,7 @@ type App struct {
 	updProxy  string
 	themeIdx  int
 	autoRecon bool
+	storage   storageState
 	// lkChoice and lkMCPChoice are the switches of settings.LocalKeys and
 	// LocalKeysMCP.
 	lkChoice, lkMCPChoice bool
@@ -506,6 +565,11 @@ type App struct {
 	metEvery      int
 	metMount      string
 	metMountFocus bool
+	// termCustom shows the terminal type setting's custom field, termText
+	// its text; termFocus is set while it has the keyboard (termTypeRow).
+	termCustom bool
+	termText   string
+	termFocus  bool
 	// newGate, newTools and newModel are test seams. Nil uses
 	// policy.NewGate, the host's remote tools, and the OpenAI client.
 	newGate  func(mode func() policy.Mode, ask policy.Prompter) policy.Gate
@@ -607,6 +671,8 @@ type App struct {
 	masterPw     *masterPwForm
 	masterPwOpen bool
 	masterPwHold focusHold
+	// lock is the app lock in front of the windows
+	lock appLock
 	// cloud is what this device knows of the places it backs up to, read
 	// once; cloudCtx ends their requests when the app closes. target is
 	// the backup location sheet open, remotes the sheet of a place's
@@ -626,6 +692,7 @@ type App struct {
 func New(p Platform) (*App, error) {
 	a := &App{p: p, ws: layout.New(), conns: map[int]*conn{}, pool: session.NewPool(), typed: map[string]string{}, typedGen: map[string]int{}, skipKeys: map[string]bool{}, rememberKeys: map[string]localkeys.Remembered{}, lk: localkeys.Open(""), sections: map[string]*bool{}, temps: map[string]assets.Host{}, pct: map[int]*float32{}, fwds: map[string]*fwdRun{}, fwdOpen: map[string]bool{}, paneBounds: map[int]ui.Rect{}, metrics: map[string]*session.Collector{}, aiRecent: map[string]int{}}
 	a.logo = appicon.Bitmap()
+	a.awake = awake.New(p.Awake)
 	a.settings = settings.Default()
 	a.shells = detectShells()
 	a.kdf = vault.DefaultParams
@@ -689,8 +756,19 @@ func (disabledUpdates) SetRoute(updater.Route)       {}
 func (disabledUpdates) Available() string            { return "" }
 func (disabledUpdates) OnChange(func()) (off func()) { return func() {} }
 
+// copySecret puts the secret s on the clipboard, marked as confidential
+// where the platform can (Platform.CopySecret), else as any text.
+func (a *App) copySecret(c *ui.Context, s string) {
+	if a.p.CopySecret == nil || a.p.CopySecret(s) != nil {
+		c.WriteClipboard(s)
+	}
+}
+
 func (a *App) syncChoices() {
 	a.lkOn.Store(a.settings.LocalKeys)
+	a.xferOn.Store(a.settings.TerminalTransfers)
+	a.returnDirOn.Store(a.settings.ReturnToFolder)
+	a.awake.SetEnabled(a.settings.KeepAwake)
 	a.lkMCP.Store(a.settings.LocalKeys && a.settings.LocalKeysMCP)
 	a.langChoice = a.settings.Language
 	a.fontChoice = float64(a.settings.TerminalFontSize)
@@ -744,6 +822,7 @@ func (a *App) ApplySettings(s settings.Settings) error {
 		}
 	}
 	a.settings = s
+	a.xferOn.Store(s.TerminalTransfers)
 	if old.Background != s.Background {
 		a.background.preview = nil
 		a.invalidate()
@@ -816,6 +895,7 @@ func (a *App) ApplySettings(s settings.Settings) error {
 
 // Start applies the saved theme and language to the window.
 func (a *App) Start() {
+	a.reportStorageMove()
 	a.loadFonts()
 	a.probeDesktop()
 	if a.p.SetTheme != nil {
@@ -847,6 +927,8 @@ func (a *App) startIndependent() {
 		return
 	}
 	a.unlock.started = true
+	a.watchNetwork()
+	a.watchSleep()
 	a.loadLayout()
 	if a.settings.OpenLocalOnStart {
 		a.post(func() {
@@ -930,6 +1012,12 @@ func (a *App) Close() {
 	a.unlock.closed = true
 	a.unlock.after = nil
 	a.cloudStop()
+	if a.netStop != nil {
+		a.netStop()
+	}
+	if a.lock.stopSleep != nil {
+		a.lock.stopSleep()
+	}
 	a.stopCollectors()
 	a.stopMCP()
 	a.waitMCP()
@@ -951,7 +1039,9 @@ func (a *App) Close() {
 	}
 	a.stopACPProbes()
 	a.waitACP()
+	a.awake.Close()
 	a.clipAsk = nil
+	a.xfer = xferState{}
 	a.fwds = map[string]*fwdRun{}
 	if a.kc != nil && (!a.unlock.busy || a.unlock.completed) {
 		a.closeSecrets(a.kc)
@@ -1036,6 +1126,7 @@ func (a *App) makeConn(hostID string, kind layout.Kind, link int) (*conn, error)
 		AutoReconnect: a.settings.AutoReconnect,
 		NoShell:       kind != layout.Terminal,
 		Local:         isLocal(h.ID),
+		Term:          cmp.Or(h.Term, a.settings.TerminalType),
 	}
 	var cfg session.Config
 	switch {
@@ -1050,14 +1141,14 @@ func (a *App) makeConn(hostID string, kind layout.Kind, link int) (*conn, error)
 	if kind == layout.Terminal {
 		opts.Dir = h.TerminalDir
 		if !opts.Local && !isStream(h) {
-			c.start = &shellStart{host: h.Tmux}
+			c.start = &shellStart{host: h.Tmux, dir: h.TerminalDir, startup: h.Startup}
 			opts.Start = a.shellStartCmd(c)
 		}
 	}
 	c.s = session.New(cfg, opts, 80, 24)
 	c.s.OnChange = a.invalidate
 	if kind != layout.Terminal {
-		c.fs = newFilesState(a.invalidate)
+		c.fs = a.newFiles()
 		c.fs.transfers.Client = a.transferClient(c)
 		c.fs.transfers.SetConcurrency(a.settings.TransferConcurrency)
 	} else {
@@ -1071,6 +1162,7 @@ func (a *App) makeConn(hostID string, kind layout.Kind, link int) (*conn, error)
 		c.tv.acProvider = a.termSuggestions
 		a.spaceTerm(c.tv)
 		a.armOSC52(c)
+		a.armTransfers(c)
 		if a.termSeq == nil {
 			a.termSeq = map[string]int{}
 		}
@@ -1126,6 +1218,9 @@ func (a *App) startConn(c *conn) {
 func (a *App) connectionNeedsSecrets(h assets.Host) bool {
 	if a.unlocked() || !a.unlock.stored || isLocal(h.ID) {
 		return false
+	}
+	if h.SSH() && h.Startup {
+		return true // its startup commands are typed once the shell starts
 	}
 	path, _ := a.store.JumpPath(h.ID)
 	path = append(path, h)
@@ -1296,6 +1391,12 @@ func (a *App) credentials(c *conn, h assets.Host) (session.Credentials, error) {
 		return a.hostCredentials(h, typed)
 	case assets.AuthAgent:
 		out.Agent = true
+	case assets.AuthNone:
+		if !h.SSH() {
+			// A Telnet or serial host logged in to by hand.
+			return out, session.ErrNoCredentials
+		}
+		out.None = true
 	case assets.AuthCredential:
 		cr, ok := a.store.Credential(h.CredentialID)
 		if !ok {
@@ -1421,9 +1522,15 @@ func (a *App) finishCloseSession(c *conn) {
 	if a.clipAsk != nil && a.clipAsk.pane == id {
 		a.clipAsk = nil
 	}
+	a.dropXferAsk(id)
 	a.keepRailWidth(c)
+	t, _ := a.ws.Locate(id)
+	active := t != nil && t == a.ws.ActiveTab()
 	a.ws.Close(id)
 	delete(a.conns, id)
+	if c.kind == layout.Files && active && a.ws.ActiveTab() == t {
+		a.focusFirstTerminal(t)
+	}
 	if c.kind == layout.Broadcast {
 		// Typing goes to several terminals only while the pane shows.
 		a.bc.live = false
@@ -1443,6 +1550,23 @@ func (a *App) finishCloseSession(c *conn) {
 	if !a.closing {
 		a.saveLayout()
 	}
+}
+
+// focusFirstTerminal gives tab t's focus, and the keyboard, to its
+// terminal opened first, so typing reaches the shell again once the
+// files pane closes. A tab without a terminal keeps its focus.
+func (a *App) focusFirstTerminal(t *layout.Tab) {
+	var first *layout.Node
+	for _, p := range t.Panes() {
+		if p.Item.Kind == layout.Terminal && a.conns[p.Item.ID] != nil && (first == nil || p.Item.ID < first.Item.ID) {
+			first = p
+		}
+	}
+	if first == nil {
+		return
+	}
+	t.Focus = first.ID
+	a.focusReq = first.Item.ID
 }
 
 // releaseTermNo forgets a host's pane numbers once its last terminal

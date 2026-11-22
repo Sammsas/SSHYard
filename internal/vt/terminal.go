@@ -34,6 +34,14 @@ type Modes struct {
 	Mouse          MouseMode
 	MouseSGR       bool // 1006: SGR encoding of mouse reports
 	FocusReport    bool // 1004
+	// LinuxKeys sends the keys as the Linux console does (TERM=linux):
+	// F1–F5 ESC [ [ A–E, Home and End ESC [ 1 ~ and ESC [ 4 ~. It is the
+	// terminal's, set with SetLinuxKeys, which no program changes.
+	LinuxKeys bool
+	// BackspaceBS sends BS (^H) for Backspace and DEL for Ctrl+Backspace,
+	// the other way round from xterm. It is the terminal's, set with
+	// SetBackspaceBS, which no program changes.
+	BackspaceBS bool
 }
 
 type cursor struct {
@@ -57,6 +65,8 @@ type Terminal struct {
 	primary    screen
 	alt        screen
 	altActive  bool
+	linuxKeys  bool // Modes.LinuxKeys
+	bsKey      bool // Modes.BackspaceBS
 
 	scrollback    history
 	maxScrollback int
@@ -79,6 +89,7 @@ type Terminal struct {
 	title       string
 	cwd         string
 	cwdHost     string // the host the cwd report named
+	cwdReports  uint64 // how many directory reports came, the same one too
 	remoteHost  string // OSC 1337 RemoteHost's host
 	g0Graphics  bool
 	g1Graphics  bool
@@ -231,6 +242,15 @@ func (t *Terminal) Cwd() string {
 	return t.cwd
 }
 
+// CwdReports counts the directory reports the shell made (OSC 7 or OSC
+// 1337 CurrentDir), each one, the same directory again too: a shell that
+// makes one at every prompt shows a new prompt as it grows.
+func (t *Terminal) CwdReports() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cwdReports
+}
+
 // CwdHost is the host the last directory report named: OSC 7's
 // file://host/, or for OSC 1337 CurrentDir the host of the last OSC 1337
 // RemoteHost=user@host; "" when it named none.
@@ -246,7 +266,23 @@ func (t *Terminal) Modes() Modes {
 	defer t.mu.Unlock()
 	m := t.modes
 	m.AltScreen = t.altActive
+	m.LinuxKeys = t.linuxKeys
+	m.BackspaceBS = t.bsKey
 	return m
+}
+
+// SetLinuxKeys makes the keys those of the Linux console (Modes.LinuxKeys).
+func (t *Terminal) SetLinuxKeys(on bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.linuxKeys = on
+}
+
+// SetBackspaceBS makes Backspace send BS (Modes.BackspaceBS).
+func (t *Terminal) SetBackspaceBS(on bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.bsKey = on
 }
 
 // Generation increases every time the terminal changes.

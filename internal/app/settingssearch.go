@@ -52,6 +52,7 @@ var settingEntries = []settingEntry{
 	{prefGeneral, locales.Messages.RememberLayout, locales.Messages.RememberLayoutNote},
 	{prefGeneral, locales.Messages.ToolPanes, locales.Messages.ToolPanesNote},
 	{prefGeneral, locales.Messages.RenewalNotify, locales.Messages.RenewalNotifyNote},
+	{prefGeneral, locales.Messages.NotificationTest, locales.Messages.NotificationTestNote},
 	{prefGeneral, locales.Messages.WindowTraySection, nil},
 	{prefGeneral, locales.Messages.CloseBehavior, locales.Messages.CloseBehaviorNote},
 	{prefGeneral, locales.Messages.TrayIconStyle, locales.Messages.TrayIconStyleNote},
@@ -61,6 +62,12 @@ var settingEntries = []settingEntry{
 	{prefGeneral, locales.Messages.CheckAutomatically, nil},
 	{prefGeneral, locales.Messages.UpdateInterval, locales.Messages.UpdateIntervalNote},
 	{prefGeneral, locales.Messages.FieldProxy, locales.Messages.ProxySystemNote},
+	{prefGeneral, locales.Messages.RailSection, nil},
+	{prefSecurity, locales.Messages.AppLockSection, nil},
+	{prefSecurity, locales.Messages.AppLockMethod, nil},
+	{prefSecurity, locales.Messages.AppLockIdle, locales.Messages.AppLockIdleNote},
+	{prefSecurity, locales.Messages.AppLockOnSleep, nil},
+	{prefSecurity, locales.Messages.AppLockNow, nil},
 	{prefAppearance, locales.Messages.Theme, nil},
 	{prefAppearance, locales.Messages.UiZoom, locales.Messages.UiZoomDesc},
 	{prefAppearance, locales.Messages.BackgroundSection, locales.Messages.BackgroundNote},
@@ -77,6 +84,7 @@ var settingEntries = []settingEntry{
 	{prefTerminal, locales.Messages.TerminalCursorBlink, locales.Messages.TerminalCursorBlinkNote},
 	{prefTerminal, locales.Messages.TerminalLineNumbers, locales.Messages.TerminalLineNumbersNote},
 	{prefTerminal, locales.Messages.TerminalTimestamps, locales.Messages.TerminalTimestampsNote},
+	{prefTerminal, locales.Messages.TabTitleSource, locales.Messages.TabTitleSourceNote},
 	{prefTerminal, locales.Messages.TerminalFont, nil},
 	{prefTerminal, locales.Messages.TerminalFallbackFont, locales.Messages.TerminalFallbackFontNote},
 	{prefTerminal, locales.Messages.MonospacedOnly, locales.Messages.MonospacedOnlyNote},
@@ -89,22 +97,29 @@ var settingEntries = []settingEntry{
 	{prefTerminal, locales.Messages.HighlightFullScreen, locales.Messages.HighlightFullScreenNote},
 	{prefTerminal, locales.Messages.HighlightPresets, nil},
 	{prefTerminal, locales.Messages.HighlightRules, nil},
+	{prefTerminal, locales.Messages.CompletionSection, nil},
+	{prefTerminal, locales.Messages.TerminalCompletion, locales.Messages.TerminalCompletionNote},
 	{prefTerminal, locales.Messages.LocalTerminal, nil},
 	{prefTerminal, locales.Messages.OpenLocalOnStart, locales.Messages.OpenLocalOnStartNote},
 	{prefTerminal, locales.Messages.DefaultShell, locales.Messages.DefaultShellNote},
 	{prefTerminal, locales.Messages.ConnectionSection, nil},
 	{prefTerminal, locales.Messages.KeepAlive, nil},
 	{prefTerminal, locales.Messages.AutoReconnect, nil},
+	{prefTerminal, locales.Messages.ReturnToFolder, locales.Messages.ReturnToFolderNote},
+	{prefTerminal, locales.Messages.TermType, locales.Messages.TermTypeNote},
 	{prefTerminal, locales.Messages.ClipboardSection, nil},
 	{prefTerminal, locales.Messages.RightClick, locales.Messages.RightClickNote},
 	{prefTerminal, locales.Messages.CopyOnSelect, locales.Messages.CopyOnSelectNote},
 	{prefTerminal, locales.Messages.Osc52Title, locales.Messages.Osc52Note},
 	{prefTerminal, locales.Messages.Osc52Limit, locales.Messages.Osc52LimitHint},
 	{prefTerminal, locales.Messages.Osc52Notify, locales.Messages.Osc52NotifyNote},
+	{prefTerminal, locales.Messages.TermXferSection, nil},
+	{prefTerminal, locales.Messages.TermXferSetting, locales.Messages.TermXferSettingNote},
 	{prefMonitoring, locales.Messages.MetricsBar, locales.Messages.MetricsBarNote},
 	{prefMonitoring, locales.Messages.MetricsInterval, nil},
 	{prefMonitoring, locales.Messages.MetricsMount, locales.Messages.MetricsMountNote},
 	{prefFiles, locales.Messages.TransferConcurrency, locales.Messages.TransferConcurrencyHint},
+	{prefFiles, locales.Messages.KeepAwake, locales.Messages.KeepAwakeNote},
 	{prefFiles, locales.Messages.OpenConfirmMB, locales.Messages.OpenConfirmHint},
 	{prefFiles, locales.Messages.FilesEdge, locales.Messages.FilesEdgeNote},
 	{prefFiles, locales.Messages.FilesZoom, locales.Messages.FilesZoomNote},
@@ -160,10 +175,14 @@ var settingEntries = []settingEntry{
 }
 
 // settingsIndex is everything the search finds on the pages: the
-// settings above, with the highlighting presets, the sources to migrate
-// from and the actions with a shortcut, as their pages list them.
+// settings above, with the rail's items, the highlighting presets, the
+// sources to migrate from and the actions with a shortcut, as their pages
+// list them.
 func settingsIndex() []settingEntry {
 	out := slices.Clone(settingEntries)
+	for _, it := range railItems {
+		out = append(out, settingEntry{prefGeneral, it.name, nil})
+	}
 	for _, p := range highlight.Presets {
 		id := p.ID
 		out = append(out, settingEntry{prefTerminal, func(m locales.Messages) string { return presetName(m, id) }, nil})

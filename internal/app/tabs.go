@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Licoy/sshyard/internal/assets"
 	"github.com/Licoy/sshyard/internal/icons"
 	"github.com/Licoy/sshyard/internal/layout"
 	"github.com/Licoy/sshyard/internal/theme"
@@ -15,8 +16,9 @@ import (
 // tabHeight and tabWidth size a tab, which stands on the title bar's
 // foot; tabs narrow alike when there are many, as a browser's, down to
 // tabMinWidth. tabInset is the track's padding at its sides, room for the
-// active tab's flare, which curves as wide: the content's gutter, so that
-// the first tab stands over the edge of the panes below; tabGap the room
+// active tab's flare, which curves as wide: the content's gutter. Beside
+// the sidebar the track has none at its start: the first tab stands on the
+// sidebar's separator, its side going on up the line. tabGap is the room
 // between two; tabRadius rounds a tab's top.
 const (
 	tabHeight   = 36
@@ -136,7 +138,11 @@ func (a *App) tabs(c *ui.Context, m locales.Messages, tok theme.Tokens) {
 	fill := a.contentFill(tok.Canvas, canvasAlpha)
 	area.Children(func() {
 		if len(shown) > 0 {
-			track := ui.Row(c.Key("tabs")).Shrink(1).MinWidth(0).Height(tabHeight).Padding(0, tabInset).Gap(tabGap).AlignItems(ui.End)
+			lead := float32(tabInset)
+			if !a.sidebarHidden() {
+				lead = 0 // the first tab stands on the sidebar's separator
+			}
+			track := ui.Row(c.Key("tabs")).Shrink(1).MinWidth(0).Height(tabHeight).Padding(0, tabInset, 0, lead).Gap(tabGap).AlignItems(ui.End)
 			track.Children(func() {
 				for j, t := range shown {
 					i := start + j
@@ -168,6 +174,9 @@ func (a *App) newTabButton(c *ui.Context, m locales.Messages) {
 	add := a.menuButton(c, "newtab", IconButton{Icon: icons.Add, Label: m.NewTab()}, func() []menuEntry {
 		return a.newTabEntries(c, m)
 	})
+	if a.menu.key != "newtab" {
+		a.newTabQuery = ""
+	}
 	if cn == nil {
 		return
 	}
@@ -195,22 +204,39 @@ func (a *App) newTabButton(c *ui.Context, m locales.Messages) {
 	})
 }
 
-// newTabEntries are the entries of the "+" after the tabs: a new
-// connection, then the saved hosts, each with its tile.
+// newTabEntries are the entries of the "+" after the tabs: a search of
+// the saved hosts, a new connection, then the saved hosts, each with its
+// tile. While searching, only the hosts found show, and Enter connects to
+// the first.
 func (a *App) newTabEntries(c *ui.Context, m locales.Messages) []menuEntry {
-	tok := currentTokens(c)
-	entries := []menuEntry{
+	fixed := []menuEntry{
 		a.bound(actQuickConnect, menuEntry{Icon: icons.Quick, Label: m.QuickConnectMenu(), Do: a.OpenQuickConnect}),
 		{Icon: icons.Host, Label: m.NewHost(), Do: func() { a.openEditor(nil) }},
 		a.localEntry(m),
 	}
 	hosts := a.store.List()
-	if len(hosts) > 0 {
-		entries = append(entries, menuSep)
+	if len(hosts) == 0 {
+		return fixed
 	}
+	query := strings.TrimSpace(a.newTabQuery)
+	if query != "" {
+		hosts = a.store.Search(query)
+	}
+	entries := []menuEntry{{Search: &a.newTabQuery, Label: m.SearchHosts(), Do: func() {
+		if query != "" && len(hosts) > 0 {
+			a.Connect(hosts[0].ID, openAt{})
+		}
+	}}}
+	if query == "" {
+		entries = append(entries, fixed...)
+	}
+	if len(hosts) == 0 {
+		return append(entries, menuEntry{Label: m.PaletteNoResults(), Disabled: true})
+	}
+	entries = append(entries, menuSep)
 	for _, h := range hosts {
 		entries = append(entries, menuEntry{
-			Lead:  func() { hostAvatar(c, tok, h, 16) },
+			Lead:  func() { hostAvatar(c, currentTokens(c), h, 16) },
 			Label: a.pv(h.Label()),
 			Do:    func() { a.Connect(h.ID, openAt{}) },
 		})
@@ -240,15 +266,28 @@ func (a *App) tab(c *ui.Context, m locales.Messages, tok theme.Tokens, fill ui.C
 	if on {
 		chip.Background(fill)
 	}
+	tint, tinted := tok.TintNamed(t.Color)
 	chip.Draw(func(p *ui.Painter, r ui.Rect) {
+		box := ui.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: r.H - foot - 6}
 		switch {
 		case on:
-			tabEdge(p, r, fill, tok.Line)
+			tabEdge(p, r, fill, tok.Line, j == 0 && !a.sidebarHidden())
+			tabTintBar(p, r, r.Y+2, tint, tinted)
 			return
 		case hovered[j]:
 			// Lit as a capsule round its contents, not joining the content.
-			p.Fill(ui.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: r.H - foot - 6}, lit, tabRadius)
+			p.Fill(box, lit, tabRadius)
+			tabTintBar(p, r, box.Y, tint, tinted)
 			return
+		}
+		if tinted {
+			// A tab of the user's color, faintly washed in it.
+			wash := float32(0.08)
+			if tok.Dark {
+				wash = 0.14
+			}
+			p.Fill(box, tint.Alpha(wash), tabRadius)
+			tabTintBar(p, r, box.Y, tint, tinted)
 		}
 		if next := j + 1; next < len(hovered) && next != activeAt && !hovered[j] && !hovered[next] {
 			x, mid := r.X+r.W+tabGap/2, r.Y+(r.H-foot)/2
@@ -285,7 +324,7 @@ func (a *App) tab(c *ui.Context, m locales.Messages, tok theme.Tokens, fill ui.C
 			a.closeTab(t)
 		}
 	})
-	a.contextMenu(chip, func() []menuEntry { return a.tabEntries(m, i) })
+	a.contextMenuOr(chip, func() []menuEntry { return a.tabEntries(m, i) }, a.middleClose(t, chip.Bounds()))
 	if chip.Clicked() {
 		a.ws.Active = i
 		a.page = pageWorkspace
@@ -323,18 +362,55 @@ func (a *App) tabDrops(c *ui.Context, chip ui.Element, t *layout.Tab, tok theme.
 // tabEdge draws the active tab in r into the content below it: its flare,
 // in the content's fill, curving out on to the title bar's foot either
 // side, and its hairline round the sides and the top, where it stands on
-// the title bar.
-func tabEdge(p *ui.Painter, r ui.Rect, fill, line ui.Color) {
+// the title bar. A flush tab, the first beside the sidebar, has no flare
+// on its left: its side runs straight down the sidebar's separator, just
+// left of it, into the line below.
+func tabEdge(p *ui.Painter, r ui.Rect, fill, line ui.Color, flush bool) {
 	const R, F = tabRadius, tabInset
 	l, rt, top, b := r.X, r.X+r.W, r.Y, r.Y+r.H
 	var flare ui.Path
-	flare.MoveTo(l-F, b).QuadTo(l, b, l, b-F).LineTo(l, b).Close()
+	if !flush {
+		flare.MoveTo(l-F, b).QuadTo(l, b, l, b-F).LineTo(l, b).Close()
+	}
 	flare.MoveTo(rt+F, b).QuadTo(rt, b, rt, b-F).LineTo(rt, b).Close()
 	p.FillPath(&flare, fill)
 	var edge ui.Path
-	edge.MoveTo(l-F, b-0.5).QuadTo(l+0.5, b-0.5, l+0.5, b-F).LineTo(l+0.5, top+R).QuadTo(l+0.5, top+0.5, l+R, top+0.5).
-		LineTo(rt-R, top+0.5).QuadTo(rt-0.5, top+0.5, rt-0.5, top+R).LineTo(rt-0.5, b-F).QuadTo(rt-0.5, b-0.5, rt+F, b-0.5)
+	if flush {
+		edge.MoveTo(l-0.5, b).LineTo(l-0.5, top+R).QuadTo(l-0.5, top+0.5, l+R, top+0.5)
+	} else {
+		edge.MoveTo(l-F, b-0.5).QuadTo(l+0.5, b-0.5, l+0.5, b-F).LineTo(l+0.5, top+R).QuadTo(l+0.5, top+0.5, l+R, top+0.5)
+	}
+	edge.LineTo(rt-R, top+0.5).QuadTo(rt-0.5, top+0.5, rt-0.5, top+R).LineTo(rt-0.5, b-F).QuadTo(rt-0.5, b-0.5, rt+F, b-0.5)
 	p.StrokePath(&edge, 1, line)
+}
+
+// tabTintBar draws the bar of a tab of the user's color (SetTabColor)
+// across the top of the tab in r, at y, clear of its rounded corners.
+func tabTintBar(p *ui.Painter, r ui.Rect, y float32, tint ui.Color, tinted bool) {
+	if tinted {
+		p.Fill(ui.Rect{X: r.X + 10, Y: y, W: max(r.W-20, 0), H: 3}, tint, 1.5)
+	}
+}
+
+// middleClose closes tab t, whose element is at b, as its close button
+// does, when the middle button is pressed and let go over it; it is the
+// element's HandleInput, taking only the middle button.
+func (a *App) middleClose(t *layout.Tab, b ui.Rect) func(ui.InputEvent) bool {
+	return func(ev ui.InputEvent) bool {
+		if ev.Button != 2 {
+			return false
+		}
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			return true // and so the release
+		case ui.InputPointerUp:
+			if !ev.Canceled && ev.X >= 0 && ev.Y >= 0 && ev.X < b.W && ev.Y < b.H && slices.Contains(a.ws.Tabs, t) {
+				a.closeTab(t)
+			}
+			return true
+		}
+		return false
+	}
 }
 
 // tabTip is a tab's tip, shown at once under it: the host of each of its
@@ -360,6 +436,10 @@ func (a *App) tabTip(c *ui.Context, m locales.Messages, tok theme.Tokens, chip u
 							title = m.FilesPane(title)
 						}
 						ui.Text(c, title).FontSize(theme.Footnote).FontWeight(600).SingleLine()
+						// In full what the tab's title shows in short.
+						if src := a.tabSource(cn); src != "" {
+							ui.Text(c, src).FontSize(theme.Caption).TextColor(tok.TextMuted).SingleLine()
+						}
 						var parts []string
 						if target := h.Target(); target != "" {
 							parts = append(parts, a.pv(target))
@@ -428,6 +508,7 @@ func (a *App) moreTab(c *ui.Context, m locales.Messages, tok theme.Tokens, t *la
 	case hov:
 		row.Background(tok.Hover)
 	}
+	row.HandleInput(a.middleClose(t, row.Bounds()))
 	closed := false
 	row.Children(func() {
 		var sub []string
@@ -517,8 +598,14 @@ func (a *App) tabEntries(m locales.Messages, i int) []menuEntry {
 		return func() { a.closeTabs(close) }
 	}
 	t := a.ws.Tabs[i]
+	_, saved := a.store.Get(host)
 	return []menuEntry{
 		{Icon: icons.Rename, Label: m.RenameTabEllipsis(), Do: func() { a.openTabRename(t) }},
+		{Icon: icons.Appearance, Label: m.TabColor(), Sub: a.tabColorEntries(m, t)},
+		menuSep,
+		{Icon: icons.Duplicate, Label: m.DuplicateSession(), Disabled: host == "", Do: func() { a.duplicateTab(m, t) }},
+		{Icon: icons.Copy, Label: m.CopyHostIP(), Disabled: a.tabAddress(t) == "", Do: func() { a.copyTabAddress(t) }},
+		{Icon: icons.Locate, Label: m.RevealHostInSidebar(), Disabled: !saved, Do: func() { a.locateHost(host) }},
 		menuSep,
 		{Icon: icons.Close, Label: m.CloseTab(), Do: closing(func(j int, _ *layout.Tab) bool { return j == i })},
 		{Label: m.CloseOtherTabs(), Disabled: n < 2, Do: closing(func(j int, _ *layout.Tab) bool { return j != i })},
@@ -529,6 +616,68 @@ func (a *App) tabEntries(m locales.Messages, i int) []menuEntry {
 		{Label: m.CloseOtherHostTabs(), Disabled: others == 0, Do: closing(func(_ int, t *layout.Tab) bool { return a.tabHost(t) != host })},
 		menuSep,
 		{Icon: icons.Clear, Label: m.CloseAllTabs(), Danger: true, Do: closing(func(int, *layout.Tab) bool { return true })},
+	}
+}
+
+// tabColorEntries are the entries of tab t's color submenu: none, then
+// each of the theme's tints, the one it has checked.
+func (a *App) tabColorEntries(m locales.Messages, t *layout.Tab) []menuEntry {
+	out := []menuEntry{{Label: m.TabColorNone(), Checked: t.Color == "", Do: func() { a.SetTabColor(t.ID, "") }}}
+	names := colorNames(m)
+	for i, key := range theme.TintNames {
+		out = append(out, menuEntry{Swatch: key, Label: names[i], Checked: t.Color == key, Do: func() { a.SetTabColor(t.ID, key) }})
+	}
+	return out
+}
+
+// SetTabColor gives the tab of id the tint of name (theme.TintNames), or
+// none for "" or a name it does not know.
+func (a *App) SetTabColor(id int, name string) {
+	if !slices.Contains(theme.TintNames, name) {
+		name = ""
+	}
+	for _, t := range a.ws.Tabs {
+		if t.ID == id {
+			t.Color = name
+		}
+	}
+}
+
+// duplicateTab opens a new session on tab t's host in a new tab: a files
+// pane for a files pane, a terminal for any other.
+func (a *App) duplicateTab(m locales.Messages, t *layout.Tab) {
+	cn := a.conns[t.Focused().ID]
+	if cn == nil || cn.host.ID == "" {
+		return
+	}
+	kind := layout.Terminal
+	if cn.kind == layout.Files {
+		kind = layout.Files
+	}
+	if _, err := a.open(cn.host.ID, kind, openAt{}, cn); err != nil {
+		a.toastError(m.ErrGeneric(err.Error()))
+	}
+}
+
+// tabAddress is the address of tab t's host, "" for a local terminal or a
+// serial device.
+func (a *App) tabAddress(t *layout.Tab) string {
+	cn := a.conns[t.Focused().ID]
+	if cn == nil || cn.host.ID == "" || isLocal(cn.host.ID) {
+		return ""
+	}
+	h := a.liveHost(cn.host)
+	if h.Protocol == assets.ProtoSerial {
+		return ""
+	}
+	return h.Address
+}
+
+// copyTabAddress copies the address of tab t's host.
+func (a *App) copyTabAddress(t *layout.Tab) {
+	if addr := a.tabAddress(t); addr != "" {
+		a.svc.WriteClipboard(addr)
+		a.toast(func(m locales.Messages) ui.Toast { return ui.Toast{Title: m.Copied(), Type: "success"} })
 	}
 }
 

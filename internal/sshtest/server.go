@@ -44,6 +44,8 @@ type Server struct {
 	Password string
 	// AuthorizedKey, when set, may log in too.
 	AuthorizedKey ssh.PublicKey
+	// NoClientAuth logs anyone in with the "none" method.
+	NoClientAuth atomic.Bool
 	// AuthorizedKeysFile, when set, is read at each public-key attempt;
 	// any key in it may log in. As with OpenSSH's StrictModes, it is
 	// ignored when it or its directory is writable by group or others.
@@ -60,6 +62,10 @@ type Server struct {
 	// RefuseEnv refuses "env" requests, as a server whose AcceptEnv does
 	// not name the variable.
 	RefuseEnv bool
+	// IgnoreEnv leaves "env" requests unanswered, as warpgate does;
+	// IgnoreShell leaves "shell" requests unanswered, as a server that
+	// never starts the shell.
+	IgnoreEnv, IgnoreShell bool
 	// ExecPTY runs "exec" requests on a channel that asked for a PTY
 	// first (ssh -t host cmd); nil leaves them to Exec.
 	ExecPTY func(ch ssh.Channel, cmd string, pty PTY, resize <-chan PTY) int
@@ -92,6 +98,7 @@ type Server struct {
 	closed   atomic.Bool
 	resizeCh chan PTY
 	tunnels  atomic.Int32
+	envs     atomic.Int32
 }
 
 // SetKeyboardInteractive logs in by keyboard-interactive questions with
@@ -101,6 +108,9 @@ func (s *Server) SetKeyboardInteractive(fn func(m ssh.ConnMetadata, client ssh.K
 	s.kbd = fn
 	s.mu.Unlock()
 }
+
+// Envs counts the "env" requests received so far.
+func (s *Server) Envs() int { return int(s.envs.Load()) }
 
 // Tunnels counts the direct-tcpip channels opened so far.
 func (s *Server) Tunnels() int { return int(s.tunnels.Load()) }
@@ -190,6 +200,7 @@ func (s *Server) config() *ssh.ServerConfig {
 			}
 			return nil, fmt.Errorf("unknown key")
 		},
+		NoClientAuth:  s.NoClientAuth.Load(),
 		ServerVersion: "SSH-2.0-SSHYardTest",
 	}
 	s.mu.Lock()
@@ -326,8 +337,14 @@ func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 				}
 			}
 		case "env":
-			r.Reply(!s.RefuseEnv, nil)
+			s.envs.Add(1)
+			if !s.IgnoreEnv {
+				r.Reply(!s.RefuseEnv, nil)
+			}
 		case "shell":
+			if s.IgnoreShell {
+				continue
+			}
 			if started {
 				r.Reply(false, nil)
 				continue

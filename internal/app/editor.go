@@ -157,7 +157,7 @@ func (a *App) editorFor(from *conn, remote bool, dir string) (*conn, error) {
 		cn.fs.remote.dir = dir
 	} else {
 		a.nextConn++
-		cn = &conn{id: a.nextConn, kind: layout.Editor, host: a.localHost(localID), fs: newFilesState(a.invalidate)}
+		cn = &conn{id: a.nextConn, kind: layout.Editor, host: a.localHost(localID), fs: a.newFiles()}
 		a.conns[cn.id] = cn
 	}
 	cn.ed = &edWin{local: !remote, at: -1, treeW: a.settings.EditorTreeWidth}
@@ -324,7 +324,8 @@ func (a *App) openEditorWindow(cn *conn) {
 // editorClosing says whether the editor's window may close, as the user
 // closes it: with unsaved changes it stays and asks what to do with them.
 func (a *App) editorClosing(cn *conn) bool {
-	if !cn.ed.dirty.Load() {
+	// A reset of the app lock deletes the drafts with everything else.
+	if !cn.ed.dirty.Load() || a.lock.resetting {
 		return true
 	}
 	a.post(func() { cn.ed.closeOpen = true })
@@ -505,6 +506,11 @@ func (a *App) editorWindowView(c *ui.Context, cn *conn) {
 	a.mu.Unlock()
 	a.drain()
 	if a.conns[cn.id] != cn {
+		return
+	}
+	c.Root().ObserveInput(a.noteInput)
+	if a.lockGate(c) {
+		a.lockedWindowView(c, cn)
 		return
 	}
 	ew := cn.ed

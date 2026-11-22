@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -25,7 +26,16 @@ type Direction int
 const (
 	Upload Direction = iota
 	Download
+	// Relay copies a file from another server (Transfer.From) to this
+	// queue's: what one SFTP channel reads goes straight to the other,
+	// through this process's memory only, never through a local file, and
+	// neither server is given the other's address or any credential.
+	Relay
 )
+
+// remoteDst says a transfer of direction d writes on the server: all but
+// a download.
+func remoteDst(d Direction) bool { return d != Download }
 
 // TransferState is where a transfer is.
 type TransferState int
@@ -74,7 +84,12 @@ type Transfer struct {
 	Offset int64
 	// Speed is the recent rate in bytes per second while it runs.
 	Speed float64
+	// From names the server a Relay copies from, as the list shows it.
+	From string
 
+	// from is a Relay's source server, as Transfers.Client is the
+	// destination's.
+	from   func(ctx context.Context) (*Client, error)
 	cancel context.CancelCauseFunc
 	// stopping is set while a transfer asked to pause or cancel is still
 	// running: State already says what was last asked (a resume or retry
@@ -89,10 +104,15 @@ type Transfer struct {
 	partOwned bool
 	partReady bool
 	partInfo  fs.FileInfo
-	srcSize   int64
-	srcMod    time.Time
-	mark      time.Time
-	markB     int64
+	// partUneven is a part that is good only up to partGood, whatever
+	// its size: an upload sends many writes at once, and when one fails
+	// the ones after it may still land past the gap.
+	partUneven bool
+	partGood   int64
+	srcSize    int64
+	srcMod     time.Time
+	mark       time.Time
+	markB      int64
 }
 
 // Percent is how far the transfer is, 0 to 100.
@@ -136,7 +156,8 @@ type Transfers struct {
 	// Backoff is the wait before retry n (1-based); 1s, 2s, 4s when nil.
 	Backoff func(n int) time.Duration
 
-	// onWrite, for tests, is called after each write of a transfer.
+	// onWrite, for tests, is called after each write of a transfer (each
+	// read of an upload's or relay's source).
 	onWrite func(t *Transfer, done int64)
 
 	mu    sync.Mutex
@@ -201,17 +222,38 @@ func (ts *Transfers) List() []Transfer {
 	return out
 }
 
+// Busy reports whether a transfer is under way: running (copying,
+// waiting for the connection or for its retry), or queued to run once a
+// slot is free. Paused, finished, failed and canceled ones wait for the
+// user, not the computer.
+func (ts *Transfers) Busy() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return slices.ContainsFunc(ts.list, func(t *Transfer) bool { return t.State == Running || t.State == Queued })
+}
+
 // Add queues copying src to dst (full paths: local to remote for an
 // Upload, remote to local for a Download). name is what the list shows.
 func (ts *Transfers) Add(dir Direction, src, dst, name string) int {
+	return ts.add(&Transfer{Name: name, Dir: dir, Src: src, Dst: dst})
+}
+
+// AddRelay queues a Relay: copying the file src of the server from
+// returns (waiting for its connection, as Client does) to dst on this
+// queue's server. fromName is what the list says it comes from.
+func (ts *Transfers) AddRelay(from func(ctx context.Context) (*Client, error), fromName, src, dst, name string) int {
+	return ts.add(&Transfer{Name: name, Dir: Relay, Src: src, Dst: dst, From: fromName, from: from})
+}
+
+func (ts *Transfers) add(t *Transfer) int {
 	ts.mu.Lock()
 	ts.next++
-	t := &Transfer{ID: ts.next, Name: name, Dir: dir, Src: src, Dst: dst}
+	t.ID = ts.next
 	var token [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
 		panic(err)
 	}
-	t.part = PartName(dst, dir == Upload) + "-" + hex.EncodeToString(token[:])
+	t.part = PartName(t.Dst, remoteDst(t.Dir)) + "-" + hex.EncodeToString(token[:])
 	ts.list = append(ts.list, t)
 	ts.pump()
 	id := t.ID
@@ -243,7 +285,7 @@ func (ts *Transfers) pump() {
 // being removed: t would write it meanwhile. Under ts.mu.
 func (ts *Transfers) partBusy(t *Transfer) bool {
 	return slices.ContainsFunc(ts.list, func(u *Transfer) bool {
-		return u != t && (u.removing || u.State == Running || u.stopping) && u.Dir == t.Dir && u.Dst == t.Dst
+		return u != t && (u.removing || u.State == Running || u.stopping) && remoteDst(u.Dir) == remoteDst(t.Dir) && u.Dst == t.Dst
 	})
 }
 
@@ -291,13 +333,19 @@ func (ts *Transfers) run(t *Transfer) {
 // attempts copies t, trying again after a failure up to MaxRetries times.
 // Waiting for the connection is no attempt.
 func (ts *Transfers) attempts(ctx context.Context, t *Transfer) error {
+	fresh := false
 	for {
-		err := ts.copy(ctx, t)
+		err := ts.copy(ctx, t, fresh)
 		if err == nil {
 			return nil // done, even if stopped as it finished
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if stale := (staleError{}); errors.As(err, &stale) && !fresh {
+			// A channel that died while it rested is no failed attempt.
+			fresh = true
+			continue
 		}
 		ts.mu.Lock()
 		if t.Attempt >= MaxRetries || permanent(err) {
@@ -322,7 +370,7 @@ func (ts *Transfers) attempts(ctx context.Context, t *Transfer) error {
 // permanent reports a failure that trying again cannot change: a missing
 // file, a refusal, or a path or folder the safety checks reject.
 func permanent(err error) bool {
-	for _, e := range []error{fs.ErrNotExist, fs.ErrPermission, ErrUnsafeName, ErrDstIsDir, ErrUnsafePath, ErrUnsafeDestination, ErrPartChanged} {
+	for _, e := range []error{fs.ErrNotExist, fs.ErrPermission, ErrUnsafeName, ErrUnsafeRemoteName, ErrDstIsDir, ErrUnsafePath, ErrUnsafeDestination, ErrPartChanged} {
 		if errors.Is(err, e) {
 			return true
 		}
@@ -353,47 +401,137 @@ func (ts *Transfers) client(ctx context.Context) (*Client, error) {
 // that a request a stalled server never answers returns at once, while
 // the shared client, the terminals and the other transfers go on. When
 // the server opens no more channels, the attempt uses the shared client.
-func (ts *Transfers) channel(ctx context.Context, t *Transfer) (*Client, func(), error) {
-	shared, err := ts.client(ctx)
+//
+// The channel may be one at rest in the pool, unless fresh. done ends
+// the attempt with its error: the channel goes back to the pool only
+// when the attempt succeeded, and the error of one whose rested channel
+// turned out dead is a staleError.
+func (ts *Transfers) channel(ctx context.Context, t *Transfer, fresh bool) (*Client, func(error) error, error) {
+	return ts.channelOn(ctx, ts.client, t, fresh)
+}
+
+// source is channel on the server a Relay copies from.
+func (ts *Transfers) source(ctx context.Context, t *Transfer, fresh bool) (*Client, func(error) error, error) {
+	if t.from == nil {
+		return nil, nil, errors.New("sftp: no connection")
+	}
+	return ts.channelOn(ctx, t.from, t, fresh)
+}
+
+// staleError is an attempt's failure on a channel that died while it
+// rested in the pool: the attempt is made again at once, on a new one.
+type staleError struct{ error }
+
+func (e staleError) Unwrap() error { return e.error }
+
+// writeRemote copies r to the SFTP file f from its offset, many writes
+// in flight at once as OpenSSH's sftp sends them: one at a time, each
+// waits a round trip, which on a distant server is most of the time.
+// A Relay's source is read the same way, through a pipe.
+func (ts *Transfers) writeRemote(t *Transfer, f *sftp.File, r io.Reader, pw *progressWriter) error {
+	if src, ok := r.(*sftp.File); ok {
+		pr, w := io.Pipe()
+		read := make(chan struct{})
+		go func() {
+			defer close(read)
+			_, err := src.WriteTo(w)
+			w.CloseWithError(err)
+		}()
+		defer func() {
+			pr.Close()
+			<-read
+		}()
+		r = pr
+	}
+	_, err := f.ReadFromWithConcurrency(progressReader{r, pw}, 0)
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if err != nil {
+		// f's offset is where the first write that failed went: all
+		// before it is written, some after it may be.
+		good, _ := f.Seek(0, io.SeekCurrent)
+		t.Bytes, t.partUneven, t.partGood = good, true, good
+		return err
+	}
+	t.Bytes, t.partUneven = pw.done, false
+	return nil
+}
+
+// channelOn is channel on the connection of the client get returns.
+func (ts *Transfers) channelOn(ctx context.Context, get func(context.Context) (*Client, error), t *Transfer, fresh bool) (*Client, func(error) error, error) {
+	shared, err := get(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	c, err := shared.operationClient(ctx)
+	open := shared.operationClient
+	if fresh {
+		open = shared.newOperation
+	}
+	c, err := open(ctx)
 	var refused *ssh.OpenChannelError
 	if err != nil && ctx.Err() == nil && (errors.As(err, &refused) || errors.Is(err, ErrOperationsBusy)) {
 		ts.logf("sftp: %s: no channel of its own (%v); using the shared one", t.Name, err)
-		return shared, func() {}, nil
+		return shared, func(err error) error { return err }, nil
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { c.Close() })
-	stopShared := func() bool { return false }
+	stopShared := func() bool { return true }
 	if shared.closed != nil {
 		stopShared = context.AfterFunc(shared.closed, func() { c.Close() })
 	}
-	return c, func() {
-		stop()
-		stopShared()
+	return c, func(err error) error {
+		stopped := stop()
+		stoppedShared := stopShared()
+		switch {
+		case err == nil && stopped && stoppedShared:
+			c.release(ctx, nil)
+			return nil
+		case err != nil && c.reused && channelLost(err) && ctx.Err() == nil:
+			err = staleError{err}
+		}
 		c.Close()
+		return err
 	}, nil
 }
 
-// copy makes one attempt at t, resuming from its part file.
-func (ts *Transfers) copy(ctx context.Context, t *Transfer) error {
-	c, done, err := ts.channel(ctx, t)
+// copy makes one attempt at t, resuming from its part file, on new
+// channels when fresh.
+func (ts *Transfers) copy(ctx context.Context, t *Transfer, fresh bool) (err error) {
+	c, done, err := ts.channel(ctx, t, fresh)
 	if err != nil {
 		return err
 	}
-	defer done()
+	defer func() { err = done(err) }()
 	remote := remoteFS{c, ctx}
 	var src, dst fileSide
-	if t.Dir == Upload {
+	switch t.Dir {
+	case Upload:
 		if err := remote.checkParents(path.Dir(t.Dst)); err != nil {
 			return err
 		}
 		src, dst = localFS{}, remote
-	} else {
+	case Relay:
+		// Plans check the names the source server sent; one queued to an
+		// unsafe name anyway must not reach a part file in another folder.
+		if err := RemoteName(path.Base(t.Dst)); err != nil {
+			return err
+		}
+		if err := remote.checkParents(path.Dir(t.Dst)); err != nil {
+			return err
+		}
+		// The source's own channel, which ending ctx closes as it does
+		// the destination's. What it reads is written to the other as it
+		// comes (io.Copy below): the bytes held at once are bounded by the
+		// SFTP reads in flight, never the file's size.
+		from, fromDone, err := ts.source(ctx, t, fresh)
+		if err != nil {
+			return err
+		}
+		defer func() { err = fromDone(err) }()
+		src, dst = remoteFS{from, ctx}, remote
+	default:
 		local, err := destinationRoot(t.Dst)
 		if err != nil {
 			return err
@@ -430,6 +568,11 @@ func (ts *Transfers) copy(ctx context.Context, t *Transfer) error {
 	if pi, err := dst.lstat(part); err == nil && t.partOwned && same && pi.Mode().IsRegular() && pi.Size() <= size {
 		partExists = true
 		off = pi.Size()
+		ts.mu.Lock()
+		if t.partUneven && off > t.partGood {
+			off = t.partGood
+		}
+		ts.mu.Unlock()
 	}
 	if t.partReady && partExists && off == size && same {
 		// A completed part needs only its failed rename retried. Reopening a
@@ -454,9 +597,9 @@ func (ts *Transfers) copy(ctx context.Context, t *Transfer) error {
 	}
 	if off == 0 {
 		ts.mu.Lock()
-		t.partReady = false
+		t.partReady, t.partUneven = false, false
 		ts.mu.Unlock()
-		if err := dst.mkdirAll(dirOf(t.Dst, t.Dir == Upload)); err != nil {
+		if err := dst.mkdirAll(dirOf(t.Dst, remoteDst(t.Dir))); err != nil {
 			return err
 		}
 	}
@@ -514,10 +657,14 @@ func (ts *Transfers) copy(ctx context.Context, t *Transfer) error {
 	if ts.onWrite != nil {
 		pw.step = func(done int64) { ts.onWrite(t, done) }
 	}
-	_, err = io.Copy(pw, r)
-	ts.mu.Lock()
-	t.Bytes = pw.done
-	ts.mu.Unlock()
+	if f, ok := w.(*sftp.File); ok {
+		err = ts.writeRemote(t, f, r, pw)
+	} else {
+		_, err = io.Copy(pw, r)
+		ts.mu.Lock()
+		t.Bytes = pw.done
+		ts.mu.Unlock()
+	}
 	if err == nil {
 		if f, ok := w.(*os.File); ok {
 			err = f.Chmod(LocalMode(fi.Mode().Perm()))

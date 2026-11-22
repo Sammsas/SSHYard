@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Licoy/sshyard/internal/assets"
 	"github.com/Licoy/sshyard/internal/icons"
 	"github.com/Licoy/sshyard/internal/layout"
 	"github.com/Licoy/sshyard/internal/session"
@@ -60,6 +61,10 @@ type sideList struct {
 	typings   int
 	typeFocus bool
 	typeHold  focusHold
+	// search, while set, shows in place of the rows; searches counts the
+	// times it opened, which keys its field.
+	search   *fileSearch
+	searches int
 }
 
 // dirSize is the size of a folder, calculated on request.
@@ -237,6 +242,57 @@ type remoteSide struct {
 	// sudoHeld stops SFTP opening again on this connection after sudo
 	// failed (Host.SFTPSudo), until the user answers or retries.
 	sudoHeld bool
+	// listSeq counts the listings asked for: only the last one shows.
+	listSeq int
+	// cache is the last listing of the folders gone to on client, the
+	// latest last, at most dirCacheMax: one gone to again shows at once,
+	// while it is listed anew.
+	cache []dirListing
+}
+
+// dirCacheMax is how many folders a files pane remembers the listing of.
+const dirCacheMax = 32
+
+// dirListing is a folder as it last listed.
+type dirListing struct {
+	dir        string
+	entries    []sftpsvc.Entry
+	unfinished []sftpsvc.Unfinished
+}
+
+// cached is the listing of dir remembered.
+func (s *remoteSide) cached(dir string) (dirListing, bool) {
+	i := slices.IndexFunc(s.cache, func(l dirListing) bool { return l.dir == dir })
+	if i < 0 {
+		return dirListing{}, false
+	}
+	return s.cache[i], true
+}
+
+// remember keeps l as the latest listing of its folder, forgetting the
+// one used longest ago past dirCacheMax.
+func (s *remoteSide) remember(l dirListing) {
+	s.cache = slices.DeleteFunc(s.cache, func(c dirListing) bool { return c.dir == l.dir })
+	if len(s.cache) >= dirCacheMax {
+		s.cache = slices.Delete(s.cache, 0, len(s.cache)-dirCacheMax+1)
+	}
+	s.cache = append(s.cache, l)
+}
+
+// forget drops the listings of dir, and of the folders under it when
+// under is set.
+func (s *remoteSide) forget(dir string, under bool) {
+	s.cache = slices.DeleteFunc(s.cache, func(l dirListing) bool {
+		return l.dir == dir || under && remoteUnder(l.dir, dir)
+	})
+}
+
+// remoteUnder says the server path p is inside the folder dir.
+func remoteUnder(p, dir string) bool {
+	if dir == "/" {
+		return p != "/" && strings.HasPrefix(p, "/")
+	}
+	return strings.HasPrefix(p, strings.TrimSuffix(dir, "/")+"/")
 }
 
 // localSide is the local half of a files pane.
@@ -282,6 +338,9 @@ type filesState struct {
 	// dismissed or the next download (planned, failing to be, or its
 	// question about files already there canceled).
 	skipped []sftpsvc.Skip
+	// skippedCopy says skipped is from a copy from another server (or
+	// folder of this one) rather than a download.
+	skippedCopy bool
 	// planning is the transfer being planned, until it is ready, fails or
 	// is canceled (a newer one cancels it too).
 	planning *planRun
@@ -291,7 +350,10 @@ type filesState struct {
 	followed string
 	// noReportHidden hides the line saying the terminal followed does not
 	// report its directory, snippetOpen is its sheet with the snippet.
+	// slowHidden hides the line saying it would follow faster if the
+	// terminal reported its directory.
 	noReportHidden bool
+	slowHidden     bool
 	snippetOpen    bool
 	// queueOpen is the transfers sheet, queue its list.
 	queueOpen bool
@@ -361,6 +423,8 @@ func (fs *filesState) close() {
 	fs.closePreview()
 	fs.remote.dropSizes()
 	fs.local.dropSizes()
+	fs.remote.closeSearch()
+	fs.local.closeSearch()
 	fs.copies.close()
 	fs.pub.Lock()
 	fs.pub.client = nil
@@ -410,6 +474,17 @@ func (a *App) transferClient(cn *conn) func(context.Context) (*sftpsvc.Client, e
 	}
 }
 
+// filesProtocol is how a host's files panes reach its files.
+func filesProtocol(p assets.FileProtocol) sftpsvc.Protocol {
+	switch p {
+	case assets.FileSFTP:
+		return sftpsvc.SFTPOnly
+	case assets.FileSCP:
+		return sftpsvc.SCPOnly
+	}
+	return sftpsvc.Auto
+}
+
 // ensureSFTP opens SFTP on the pane's connection, again after it
 // reconnected.
 func (a *App) ensureSFTP(cn *conn) {
@@ -417,7 +492,8 @@ func (a *App) ensureSFTP(cn *conn) {
 	st := cn.s.Status()
 	h := a.liveHost(cn.host)
 	sudo := h.SFTPSudo && h.SSH()
-	if st.State != session.Connected || s.opening || (s.client != nil && s.connects == st.Connects && s.client.Sudo() == sudo) {
+	proto := filesProtocol(h.FileProtocol)
+	if st.State != session.Connected || s.opening || (s.client != nil && s.connects == st.Connects && s.client.Sudo() == sudo && (sudo || s.client.Protocol() == proto)) {
 		return
 	}
 	if sudo && s.sudoHeld && s.client == nil && s.connects == st.Connects {
@@ -428,6 +504,8 @@ func (a *App) ensureSFTP(cn *conn) {
 		s.client.Close()
 		s.client = nil
 	}
+	// What was listed on another connection may have changed since.
+	s.cache = nil
 	client := cn.s.Client()
 	if client == nil {
 		return
@@ -444,7 +522,7 @@ func (a *App) ensureSFTP(cn *conn) {
 			pass, typed = a.sudoPassword(h)
 			c, err = sftpsvc.NewSudo(context.Background(), client, pass)
 		} else {
-			c, err = sftpsvc.New(client)
+			c, err = sftpsvc.NewProtocol(context.Background(), client, proto)
 		}
 		var home string
 		var es []sftpsvc.Entry
@@ -483,6 +561,8 @@ func (a *App) ensureSFTP(cn *conn) {
 			}
 			s.sudoHeld = false
 			s.client, s.connects, s.unfinished, s.home = c, connects, un, home
+			s.listSeq++
+			s.cache = []dirListing{{dir: dir, entries: es, unfinished: un}}
 			s.show(dir, es)
 			cn.fs.publish(c, connects)
 			if cn.kind == layout.Files {
@@ -508,21 +588,55 @@ func (a *App) readNames(cn *conn, c *sftpsvc.Client) {
 	}()
 }
 
+// listUnfinished lists a server folder and the saves left undone in it;
+// tests stand in for it.
+var listUnfinished = (*sftpsvc.Client).ListUnfinished
+
+// listRemote lists the server folder dir. A folder gone to again shows as
+// it last listed at once, then as it lists now; only the listing asked
+// for last shows. Listing the folder shown again, as after a change in
+// it, forgets what was remembered of the folders under it.
 func (a *App) listRemote(s *remoteSide, dir string) {
 	c := s.client
 	if c == nil {
 		return
 	}
+	s.listSeq++
+	seq := s.listSeq
+	var back *dirListing
+	if dir == s.dir {
+		s.forget(dir, true)
+	} else if l, ok := s.cached(dir); ok {
+		back = &dirListing{dir: s.dir, entries: s.listed, unfinished: s.unfinished}
+		name := s.reveal
+		s.unfinished = l.unfinished
+		s.show(dir, l.entries)
+		if name != "" && s.sel < 0 {
+			// Not there yet: maybe in the listing to come.
+			s.reveal = name
+		}
+	}
 	go func() {
-		es, un, err := c.ListUnfinished(dir)
+		es, un, err := listUnfinished(c, dir)
 		a.post(func() {
+			if s.listSeq != seq || s.client != c {
+				return
+			}
 			if err != nil {
+				s.forget(dir, true)
+				if back != nil && s.dir == dir {
+					// Gone since: back where it was, as when nothing
+					// was remembered.
+					s.unfinished = back.unfinished
+					s.show(back.dir, back.entries)
+				}
 				s.err, s.listErr = err.Error(), true
 				return
 			}
 			if s.listErr {
 				s.err, s.listErr = "", false
 			}
+			s.remember(dirListing{dir: dir, entries: es, unfinished: un})
 			s.unfinished = un
 			s.show(dir, es)
 		})
@@ -605,26 +719,62 @@ func (a *App) listAgain(cn *conn, remote bool) {
 // Upload copies local files and folders into the remote folder dir,
 // asking about those already there.
 func (a *App) Upload(cn *conn, paths []string, dir string) {
-	a.plan(cn, sftpsvc.Upload, paths, dir)
+	a.plan(cn, nil, sftpsvc.Upload, paths, dir)
 }
 
 // Download copies remote files and folders into the local folder dir,
 // asking about those already there.
 func (a *App) Download(cn *conn, paths []string, dir string) {
-	a.plan(cn, sftpsvc.Download, paths, dir)
+	a.plan(cn, nil, sftpsvc.Download, paths, dir)
 }
 
-func (a *App) plan(cn *conn, d sftpsvc.Direction, paths []string, dir string) {
+// Relay copies files and folders of the server of the files pane from
+// into the folder dir of the server of the files pane to, asking about
+// those already there, in to's queue. Each file streams from one
+// server's SFTP channel to the other's through this app's memory:
+// nothing is saved on this computer, and neither server logs into the
+// other or is given any credential. from may be to (another folder of
+// the same server), where a folder is not copied into itself.
+func (a *App) Relay(from, to *conn, paths []string, dir string) {
+	if from == nil || from.fs == nil || to.fs == nil || len(paths) == 0 || dir == "" {
+		return
+	}
+	if sameServer(from, to) {
+		if err := sftpsvc.CheckInto(paths, dir); err != nil {
+			a.filesErr(to, true, err)
+			return
+		}
+	}
+	a.plan(to, from, sftpsvc.Relay, paths, dir)
+}
+
+// sameServer says the files panes from and to are on the same server as
+// the same user: the same pane, connection or saved host.
+func sameServer(from, to *conn) bool {
+	return from == to || from.s == to.s || from.host.ID != "" && from.host.ID == to.host.ID
+}
+
+// plan lists what a transfer of paths into dir copies, then asks about
+// what is already there and queues the rest in cn's queue. A Relay's
+// paths are on the server of from.
+func (a *App) plan(cn, from *conn, d sftpsvc.Direction, paths []string, dir string) {
 	c := cn.fs.remote.client
 	if c == nil || len(paths) == 0 || dir == "" {
 		return
+	}
+	var src *sftpsvc.Client
+	if d == sftpsvc.Relay {
+		if src = from.fs.remote.client; src == nil {
+			return
+		}
 	}
 	if cn.fs.planning != nil {
 		cn.fs.planning.cancel()
 	}
 	// The previous failure is done with; this plan's own failure, if it
 	// has one, is set when it finishes and must survive the refresh.
-	a.filesErr(cn, d == sftpsvc.Upload, nil)
+	remote := d != sftpsvc.Download
+	a.filesErr(cn, remote, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &planRun{dir: d, cancel: cancel}
 	cn.fs.planning = run
@@ -633,9 +783,12 @@ func (a *App) plan(cn *conn, d sftpsvc.Direction, paths []string, dir string) {
 		var items []sftpsvc.Item
 		var skips []sftpsvc.Skip
 		var err error
-		if d == sftpsvc.Upload {
+		switch d {
+		case sftpsvc.Upload:
 			items, err = c.PlanUpload(ctx, paths, dir)
-		} else {
+		case sftpsvc.Relay:
+			items, skips, err = src.PlanRelay(ctx, paths, c, dir)
+		default:
 			items, skips, err = c.PlanDownload(ctx, paths, dir)
 		}
 		a.post(func() {
@@ -643,17 +796,18 @@ func (a *App) plan(cn *conn, d sftpsvc.Direction, paths []string, dir string) {
 				return // canceled, or a newer plan took its place
 			}
 			cn.fs.planning = nil
+			if d != sftpsvc.Upload {
+				// this plan's skips, none when it failed: not the last one's
+				cn.fs.skipped, cn.fs.skippedCopy = skips, d == sftpsvc.Relay
+			}
 			if err != nil {
-				if d == sftpsvc.Download {
-					cn.fs.skipped = nil // the last download's, not this one's
-				}
-				a.filesErr(cn, d == sftpsvc.Upload, err)
+				a.filesErr(cn, remote, err)
 				return
 			}
-			if d == sftpsvc.Download {
-				cn.fs.skipped = skips
-			}
 			ask := &conflictAsk{dir: d, items: items, choice: make([]resolution, len(items))}
+			if d == sftpsvc.Relay {
+				ask.from, ask.fromName = a.transferClient(from), from.host.Label()
+			}
 			a.resolveConflicts(cn, ask)
 		})
 	}()
@@ -712,7 +866,7 @@ func (a *App) resolveConflicts(cn *conn, ask *conflictAsk) {
 func (a *App) enqueue(cn *conn, ask *conflictAsk) {
 	ts := cn.fs.transfers
 	get := ts.Client
-	up := ask.dir == sftpsvc.Upload
+	up := ask.dir != sftpsvc.Download // made on the server: an upload's or a relay's
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -744,7 +898,11 @@ func (a *App) enqueue(cn *conn, ask *conflictAsk) {
 					dst = sftpsvc.UniqueName(dst, up, taken)
 				}
 				chosen[dst] = true
-				ts.Add(ask.dir, it.Src, dst, it.Rel)
+				if ask.dir == sftpsvc.Relay {
+					ts.AddRelay(ask.from, ask.fromName, it.Src, dst, it.Rel)
+				} else {
+					ts.Add(ask.dir, it.Src, dst, it.Rel)
+				}
 			}
 			if err != nil {
 				a.post(func() { a.filesErr(cn, up, err) })
@@ -1125,8 +1283,9 @@ func (a *App) calcSize(cn *conn, remote bool, name string) {
 
 // fileKeys are the keys of a side's table while it has the focus: Delete
 // (Cmd+Backspace on macOS), Cmd+I (Ctrl+I elsewhere) for the entries'
-// information, Space to preview an image, F2 to rename, Escape to choose
-// none and Shift+F10 for the menu.
+// information, Space to preview an image, F2 to rename, Cmd+C and Cmd+V
+// (Ctrl elsewhere) to copy entries and paste them, as a file list does,
+// Escape to choose none and Shift+F10 for the menu.
 func (a *App) fileKeys(c *ui.Context, cn *conn, remote bool, tb ui.Element, entries func() []menuEntry) {
 	fs := cn.fs
 	sd := fs.side(remote)
@@ -1141,8 +1300,13 @@ func (a *App) fileKeys(c *ui.Context, cn *conn, remote bool, tb ui.Element, entr
 		a.openPreview(cn, remote, es[0].Name)
 	case len(es) == 1 && tb.Shortcut(0, ui.KeyF2):
 		fs.ask, fs.askOpen = &nameAsk{kind: askRename, remote: remote, path: sidePath(remote, sd.dir, es[0].Name), value: es[0].Name}, true
+	case tb.Shortcut(toggleMods, ui.KeyC):
+		a.copyEntries(cn, remote, sd.paths(remote, es))
 	case tb.Shortcut(0, ui.KeyEscape):
 		sd.chosen.Clear()
+	}
+	if a.canPaste(cn, remote) && tb.Shortcut(toggleMods, ui.KeyV) {
+		a.paste(cn, remote)
 	}
 	if tb.Shortcut(ui.Shift, ui.KeyF10) {
 		b := tb.Bounds()
@@ -1217,15 +1381,21 @@ func (a *App) filesBody(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, 
 							Do: func() { a.listLocal(l, filepath.Dir(l.dir)) }},
 						{Key: "lrefresh", Button: IconButton{Icon: icons.Refresh, Label: m.LocalRefresh(), Size: Tiny},
 							Do: func() { a.listLocal(l, l.dir) }},
+						{Key: "lsearch", Button: IconButton{Icon: icons.Search, Label: m.SearchLocalFiles(), Active: l.search != nil, Toggle: true, Size: Tiny},
+							Do: l.toggleSearch},
 						{Key: "lmkdir", Button: IconButton{Icon: icons.NewFolder, Label: m.LocalNewFolder(), Size: Tiny},
 							Do: func() { fs.ask, fs.askOpen = &nameAsk{kind: askMkdir}, true }},
 						{Key: "upload", Button: IconButton{Icon: icons.Upload, Label: m.UploadSelected(), Disabled: s.client == nil || len(picked) == 0, Size: Tiny},
 							Do: func() { a.Upload(cn, l.paths(false, picked), s.dir) }},
 					}, m)
 					a.crumbsBar(c, cn, false, tok, m)
-					tb, opened := a.fileTable(c, cn, false, m, tok)
-					if e, ok := selected(l.sel, l.entries); (tb.Submitted() || opened) && ok {
-						a.openEntry(cn, false, e)
+					if l.search != nil {
+						a.searchView(c, cn, false, tok, m)
+					} else {
+						tb, opened := a.fileTable(c, cn, false, m, tok)
+						if e, ok := selected(l.sel, l.entries); (tb.Submitted() || opened) && ok {
+							a.openEntry(cn, false, e)
+						}
 					}
 					if l.err != "" {
 						ui.Text(c, securityText(m, l.err)).TextColor(tok.Danger).FontSize(theme.Footnote)
@@ -1260,6 +1430,8 @@ func (a *App) filesBody(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, 
 				}},
 				barAction{Key: "rrefresh", Button: IconButton{Icon: icons.Refresh, Label: m.RemoteRefresh(), Disabled: off, Size: Tiny},
 					Do: func() { a.listRemote(s, s.dir) }},
+				barAction{Key: "rsearch", Button: IconButton{Icon: icons.Search, Label: m.SearchRemoteFiles(), Active: s.search != nil, Toggle: true, Disabled: off, Size: Tiny},
+					Do: s.toggleSearch},
 				barAction{Key: "rmkdir", Button: IconButton{Icon: icons.NewFolder, Label: m.RemoteNewFolder(), Disabled: off, Size: Tiny},
 					Do: func() { fs.ask, fs.askOpen = &nameAsk{kind: askMkdir, remote: true}, true }})
 			if !dual {
@@ -1311,21 +1483,28 @@ func (a *App) filesBody(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, 
 								a.sudoHeldActions(c, cn, m)
 							}
 						})
+						if s.search != nil && s.search.running {
+							s.search.stop() // it goes on once connected again
+						}
 						return
 					}
 					if dual {
 						a.crumbsBar(c, cn, true, tok, m)
 					}
-					tb, opened := a.fileTable(c, cn, true, m, tok)
-					if a.focusReq == cn.id && a.page == pageWorkspace {
-						tb.Focus()
-						a.focusReq = 0
-					}
-					if e, ok := selected(s.sel, s.entries); (tb.Submitted() || opened) && ok {
-						a.openEntry(cn, true, e)
-					}
-					if len(s.entries) == 0 {
-						ui.Text(c, m.Empty()).TextColor(tok.TextMuted).FontSize(theme.Footnote)
+					if s.search != nil {
+						a.searchView(c, cn, true, tok, m)
+					} else {
+						tb, opened := a.fileTable(c, cn, true, m, tok)
+						if a.focusReq == cn.id && a.page == pageWorkspace {
+							tb.Focus()
+							a.focusReq = 0
+						}
+						if e, ok := selected(s.sel, s.entries); (tb.Submitted() || opened) && ok {
+							a.openEntry(cn, true, e)
+						}
+						if len(s.entries) == 0 {
+							ui.Text(c, m.Empty()).TextColor(tok.TextMuted).FontSize(theme.Footnote)
+						}
 					}
 					if s.err != "" {
 						ui.Text(c, m.ErrGeneric(securityText(m, s.err))).TextColor(tok.Danger).FontSize(theme.Footnote)
@@ -1336,11 +1515,16 @@ func (a *App) filesBody(c *ui.Context, t *layout.Tab, n *layout.Node, cn *conn, 
 				}
 				// local rows upload here, from this pane or another one: the
 				// local disk is the same for all. Remote rows of another pane
-				// are not taken (no copying between remotes).
-				if d, ok := ui.Drop[filesDrag](remote); ok && !d.remote {
-					a.Upload(cn, d.paths, s.dir)
+				// copy here from their server (Relay); this pane's own rows
+				// dropped back on it are left alone.
+				if d, ok := ui.Drop[filesDrag](remote); ok {
+					if src := a.conns[d.pane]; !d.remote {
+						a.Upload(cn, d.paths, s.dir)
+					} else if d.pane != cn.id && src != nil && src.fs != nil {
+						a.Relay(src, cn, d.paths, s.dir)
+					}
 				}
-				if d, ok := ui.DragOver[filesDrag](remote); remote.FileDragOver() || ok && !d.remote {
+				if d, ok := ui.DragOver[filesDrag](remote); remote.FileDragOver() || ok && (!d.remote || d.pane != cn.id) {
 					remote.Background(tok.Accent.Alpha(0.08))
 				}
 			})

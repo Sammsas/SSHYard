@@ -80,12 +80,15 @@ var (
 	FoldersOn    = load("layout-left-fill")
 	HideSidebar  = load("sidebar-fold-line")
 	ShowSidebar  = load("sidebar-unfold-line")
+	Rail         = load("layout-right-line")
 	Warning      = load("error-warning-line")
 	Appearance   = load("palette-line")
 	Key          = load("key-2-line")
 	Password     = load("lock-password-line")
 	Generate     = load("magic-line")
 	OpenFile     = load("folder-open-line")
+	Completion   = load("magic-line")
+	PathList     = load("folder-open-line")
 	Paste        = load("clipboard-line")
 	InstallKey   = load("shield-check-line")
 	Proxy        = load("global-line")
@@ -106,6 +109,7 @@ var (
 	OpenWithApp  = load("apps-line")
 	CopyPath     = load("file-copy-line")
 	Chmod        = load("lock-line")
+	Lock         = load("lock-line")
 	Follow       = load("footprint-line")
 	FollowOn     = load("footprint-fill")
 	Collapse     = load("arrow-down-s-line")
@@ -130,6 +134,7 @@ var (
 	Disk         = load("hard-drive-3-line")
 	Network      = load("arrow-up-down-line")
 	GPU          = load("dashboard-3-line")
+	Logins       = load("user-line")
 	Sent         = load("arrow-up-line")
 	Received     = load("arrow-down-line")
 	Uptime       = load("time-line")
@@ -138,6 +143,7 @@ var (
 	Privacy      = load("eye-off-line")
 	PrivacyOn    = load("eye-off-fill")
 	Transfers    = Network
+	Relay        = Forward // a copy from one server straight to another
 	LocalShell   = load("terminal-window-line")
 	TelnetHost   = load("terminal-line")
 	SerialHost   = load("usb-line")
@@ -156,6 +162,8 @@ var (
 	Detach      = load("logout-box-r-line")
 	OpenInTab   = load("window-line")
 	AppWindow   = OpenInTab
+	Duplicate   = WinRestore
+	Locate      = load("focus-3-line")
 	Halt        = load("stop-line")
 	Logs        = load("file-list-3-line")
 	Backup      = load("safe-2-line")

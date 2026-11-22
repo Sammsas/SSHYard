@@ -14,6 +14,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,10 @@ type Credentials struct {
 	Certificate []byte
 	// Agent signs with the system SSH agent's keys.
 	Agent bool
+	// None logs in with no password or key: the server's "none" method,
+	// then an empty password, then keyboard-interactive, its questions
+	// asked through Config.Ask.
+	None bool
 	// User, when set, logs in instead of Config.User (a credential's
 	// own user name).
 	User string
@@ -76,6 +81,10 @@ var ErrNoCredentials = errors.New("session: no password or key")
 // overloaded, or a firewall that lets the connection through and then
 // drops what follows.
 var ErrNoBanner = errors.New("session: the server sent no SSH greeting")
+
+// ErrNoShell reports a server that logged the user in but did not start
+// the shell within shellWait: it left a request unanswered.
+var ErrNoShell = errors.New("session: the server did not start the shell")
 
 // Config is how to connect to a host.
 type Config struct {
@@ -181,6 +190,9 @@ func authMethods(cr Credentials, kbd ssh.KeyboardInteractiveChallenge) ([]ssh.Au
 	}
 	if cr.Password != "" {
 		ms = append(ms, ssh.Password(cr.Password))
+	} else if cr.None {
+		// x/crypto tries "none" first on its own.
+		ms = append(ms, ssh.Password(""))
 	}
 	// Last, as the one that may ask the user: after a key, or along with
 	// one, the server may want a one-time password too.
@@ -304,6 +316,9 @@ func dialHop(ctx context.Context, hop Hop, dial func(ctx context.Context, networ
 	if offer != nil {
 		kbd.stop = offer.stopped
 	}
+	// authMethods puts keyboard-interactive last.
+	var unlisted bool
+	next := unlistedKbd(methods[len(methods)-1], cr.Password != "", &unlisted)
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -331,6 +346,7 @@ func dialHop(ctx context.Context, hop Hop, dial func(ctx context.Context, networ
 	c, chans, reqs, err := ssh.NewClientConn(heard, hop.Addr, &ssh.ClientConfig{
 		User:            user,
 		Auth:            methods,
+		AuthCallback:    next,
 		HostKeyCallback: hop.HostKey,
 		Timeout:         timeout,
 		ClientVersion:   "SSH-2.0-SSHYard",
@@ -353,6 +369,15 @@ func dialHop(ctx context.Context, hop Hop, dial func(ctx context.Context, networ
 			// needs its passphrase.
 			return nil, kbd.err
 		}
+		if unlisted && strings.Contains(err.Error(), "unexpected message type 51") {
+			// The server refused the keyboard-interactive login it did not
+			// list at once, asking nothing: the login stopped where the keys
+			// did, for a key file's passphrase, or was refused.
+			if offer != nil && offer.stopped() != nil {
+				return nil, offer.stopped()
+			}
+			err = fmt.Errorf("session: unable to authenticate: %w", err)
+		}
 		if offer != nil && cr.Password == "" && (keysRefused(err) || errors.Is(err, errPasswordWanted)) {
 			err = &KeysRefusedError{Offered: len(offer.signers), Err: err}
 		}
@@ -364,7 +389,35 @@ func dialHop(ctx context.Context, hop Hop, dial func(ctx context.Context, networ
 			cr.OnKey(id)
 		}
 	}
-	return ssh.NewClient(c, chans, reqs), nil
+	client := ssh.NewClient(c, chans, reqs)
+	heardBy.Store(client, heard)
+	go func() {
+		client.Wait()
+		heardBy.Delete(client)
+	}()
+	return client, nil
+}
+
+// unlistedKbd picks kbd, the keyboard-interactive login, once the server
+// refused the keys and, password aside, lists nothing left to try, though
+// it does not list keyboard-interactive: a JumpServer before v3.7 answers
+// the query whether it would take a key with partial success, which
+// x/crypto reads as a refusal, and lists keyboard-interactive, where it
+// asks for the one-time password, only after that. password is whether
+// the login has a password to try first; picked is set once kbd was
+// picked so. Otherwise x/crypto picks.
+func unlistedKbd(kbd ssh.AuthMethod, password bool, picked *bool) ssh.ClientAuthCallback {
+	const ki = "keyboard-interactive"
+	return func(ctx *ssh.ClientAuthContext) (ssh.AuthMethod, error) {
+		switch {
+		case !slices.Contains(ctx.TriedMethods, "publickey"),
+			slices.Contains(ctx.TriedMethods, ki), slices.Contains(ctx.AllowedMethods, ki), slices.Contains(ctx.PartialSuccessMethods, ki),
+			password && slices.Contains(ctx.AllowedMethods, "password") && !slices.Contains(ctx.TriedMethods, "password"):
+			return nil, nil
+		}
+		*picked = true
+		return kbd, nil
+	}
 }
 
 // keysRefused reports a login the server refused every key of, or hung up
@@ -374,18 +427,36 @@ func keysRefused(err error) bool {
 	return strings.Contains(s, "unable to authenticate") || strings.Contains(s, "Too many authentication failures")
 }
 
-// heardConn notes whether the server has sent anything.
+// heardConn notes whether the server has sent anything, and how many
+// times it has.
 type heardConn struct {
 	net.Conn
 	heard atomic.Bool
+	// reads counts the reads that brought something: a count, not a
+	// time, as a clock's tick may hold a read before and one after.
+	reads atomic.Uint64
 }
 
 func (c *heardConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.heard.Store(true)
+		c.reads.Add(1)
 	}
 	return n, err
+}
+
+// heardBy are the connections under the clients Dial made, while they
+// are open, by client.
+var heardBy sync.Map // *ssh.Client → *heardConn
+
+// heardCount is how many times the server of client has sent something
+// so far (data, a window adjustment, any reply), 0 when unknown.
+func heardCount(client *ssh.Client) uint64 {
+	if v, ok := heardBy.Load(client); ok {
+		return v.(*heardConn).reads.Load()
+	}
+	return 0
 }
 
 func isHostKeyErr(err error) bool {
@@ -404,6 +475,8 @@ const (
 	KindTimeout
 	// KindNoBanner: the server took the connection but never answered.
 	KindNoBanner
+	// KindNoShell: logged in, but the shell never started (ErrNoShell).
+	KindNoShell
 	KindHostUnknown
 	KindHostChanged
 	KindPassphrase
@@ -460,6 +533,8 @@ func Classify(err error) Kind {
 		return KindAuth
 	case errors.Is(err, ErrNoBanner):
 		return KindNoBanner
+	case errors.Is(err, ErrNoShell):
+		return KindNoShell
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
 		return KindTimeout
 	case errors.As(err, new(*net.OpError)), errors.As(err, new(*net.DNSError)),
@@ -473,5 +548,5 @@ func Classify(err error) Kind {
 // Retryable reports whether reconnecting automatically may help: not when
 // the user has to do something first.
 func (k Kind) Retryable() bool {
-	return k == KindNetwork || k == KindTimeout || k == KindNoBanner || k == KindProxy || k == KindOther
+	return k == KindNetwork || k == KindTimeout || k == KindNoBanner || k == KindNoShell || k == KindProxy || k == KindOther
 }

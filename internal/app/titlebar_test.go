@@ -8,6 +8,7 @@ import (
 	"github.com/Licoy/sshyard/internal/assets"
 	"github.com/Licoy/sshyard/internal/layout"
 	"github.com/Licoy/sshyard/internal/session"
+	"github.com/Licoy/sshyard/locales"
 )
 
 // TestTitleBarMultipleShells exercises shell-named tabs on every platform,
@@ -70,6 +71,22 @@ func TestTitleBar(t *testing.T) {
 	if mins != 1 || maxes != 1 || restores != 1 || closes != 1 {
 		t.Errorf("minimize %d, maximize %d, restore %d, close %d", mins, maxes, restores, closes)
 	}
+}
+
+func TestTitleBarDragKeepsTerminalInput(t *testing.T) {
+	srv, sh := startScript(t, "ready")
+	a, tt := newTestApp(t)
+	connected(t, a, tt, srv)
+	tt.Frame()
+	tt.Type("before drag")
+	expectRead(t, tt, sh, "before drag")
+
+	// Drag the empty part of the title bar, then type without clicking the terminal.
+	tt.Press(600, 8)
+	tt.Move(660, 28)
+	tt.Release(660, 28)
+	tt.Type("after drag")
+	expectRead(t, tt, sh, "after drag")
 }
 
 // TestTabs switches between the tabs with a click.
@@ -325,5 +342,104 @@ func TestNewTabButton(t *testing.T) {
 	tt.Frame()
 	if a.quick == nil || a.menu.key != "" || len(a.ws.Tabs) != 1 {
 		t.Fatalf("quick %v, menu %q, %d tabs", a.quick != nil, a.menu.key, len(a.ws.Tabs))
+	}
+}
+
+// TestNewTabSearch: the "+" menu's search narrows the saved hosts to
+// those found, in place of the new connections, and Enter connects to
+// the first; the search is gone once the menu closes.
+func TestNewTabSearch(t *testing.T) {
+	a, tt := newTestApp(t)
+	m := locales.In("en")
+	for _, h := range []assets.Host{{Name: "web", Address: "10.0.0.5"}, {Name: "db", Address: "10.0.0.6"}} {
+		h.User, h.Auth = "root", assets.AuthAgent
+		if _, err := a.Store().Add(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tt.Frame()
+	labels := func() []string { return menuLabels(a.newTabEntries(nil, m)) }
+	if got := labels(); len(got) != 7 || got[0] != m.SearchHosts() || got[1] != m.QuickConnectMenu() {
+		t.Fatalf("menu %q", got)
+	}
+	a.newTabQuery = " DB "
+	if got := labels(); len(got) != 3 || got[1] != "-" || got[2] != "db" {
+		t.Fatalf("searching: %q", got)
+	}
+	a.newTabQuery = "nothing"
+	if got := labels(); len(got) != 2 || got[1] != m.PaletteNoResults() {
+		t.Fatalf("no match: %q", got)
+	}
+	a.newTabQuery = "db"
+	a.newTabEntries(nil, m)[0].Do()
+	if cn := a.focused(); cn == nil || cn.host.Name != "db" {
+		t.Fatalf("Enter connected to %+v", cn)
+	}
+	a.menu = dropMenu{}
+	tt.Frame()
+	if a.newTabQuery != "" {
+		t.Fatalf("search kept after the menu closed: %q", a.newTabQuery)
+	}
+}
+
+// TestDuplicateTab: the tab's menu opens a new session on its host in a
+// new tab, a files pane for a files pane.
+func TestDuplicateTab(t *testing.T) {
+	a, tt := newTestApp(t)
+	h, err := a.Store().Add(assets.Host{Name: "web", Address: "127.0.0.1", Port: 1, User: "root", Auth: assets.AuthAgent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := func(i int) *conn {
+		t.Helper()
+		a.openContext(10, 10, func() []menuEntry { return a.tabEntries(locales.In("en"), i) })
+		tt.Frame()
+		if err := chooseMenu(a, tt, "Duplicate Session"); err != nil {
+			t.Fatalf("%v: %q", err, menuOf(a))
+		}
+		tt.Frame()
+		return a.focused()
+	}
+	if _, err := a.open(localID, layout.Terminal, openAt{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.OpenFiles(h.ID, openAt{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if cn := duplicate(0); len(a.ws.Tabs) != 3 || a.ws.Active != 2 || cn.kind != layout.Terminal || cn.host.ID != localID {
+		t.Fatalf("terminal: %d tabs, active %d, %+v", len(a.ws.Tabs), a.ws.Active, cn)
+	}
+	if cn := duplicate(1); len(a.ws.Tabs) != 4 || a.ws.Active != 3 || cn.kind != layout.Files || cn.host.ID != h.ID {
+		t.Fatalf("files: %d tabs, active %d, %+v", len(a.ws.Tabs), a.ws.Active, cn)
+	}
+}
+
+// TestCopyTabHostIP: the tab's menu copies its host's address, and has
+// none to copy for a local terminal.
+func TestCopyTabHostIP(t *testing.T) {
+	a, tt := newTestApp(t)
+	h, err := a.Store().Add(assets.Host{Name: "web", Address: "10.0.0.5", Port: 2222, User: "root", Auth: assets.AuthAgent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.open(localID, layout.Terminal, openAt{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.open(h.ID, layout.Terminal, openAt{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got := a.tabAddress(a.ws.Tabs[0]); got != "" {
+		t.Errorf("local terminal has address %q", got)
+	}
+	a.openContext(10, 10, func() []menuEntry { return a.tabEntries(locales.In("en"), 1) })
+	tt.Frame()
+	if err := chooseMenu(a, tt, "Copy Host IP"); err != nil {
+		t.Fatalf("%v: %q", err, menuOf(a))
+	}
+	tt.Frame()
+	if tt.Clipboard() != "10.0.0.5" {
+		t.Errorf("clipboard %q", tt.Clipboard())
 	}
 }

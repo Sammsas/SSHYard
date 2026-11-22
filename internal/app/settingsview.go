@@ -31,6 +31,7 @@ type prefPage string
 
 const (
 	prefGeneral     prefPage = "general"
+	prefSecurity    prefPage = "security"
 	prefAppearance  prefPage = "appearance"
 	prefTerminal    prefPage = "terminal"
 	prefMonitoring  prefPage = "monitoring"
@@ -64,6 +65,7 @@ func prefGroups(m locales.Messages) []prefGroup {
 	return []prefGroup{
 		{m.SettingsGroupPreferences(), []prefItem{
 			{prefGeneral, icons.Settings, m.General(), m.GeneralDesc()},
+			{prefSecurity, icons.Lock, m.SecuritySection(), m.SecurityDesc()},
 			{prefAppearance, icons.Appearance, m.Appearance(), m.AppearanceDesc()},
 			{prefTerminal, icons.Terminal, m.TerminalSection(), m.TerminalDesc()},
 			{prefMonitoring, icons.Monitor, m.MonitoringSection(), m.MonitoringDesc()},
@@ -273,6 +275,8 @@ func (a *App) settingsPage(c *ui.Context, m locales.Messages, tok theme.Tokens) 
 			switch cur {
 			case prefGeneral:
 				a.prefGeneral(c, m, tok, &s, &changed)
+			case prefSecurity:
+				a.securityPage(c, m, tok)
 			case prefAppearance:
 				a.prefAppearance(c, m, tok, &s, &changed)
 			case prefTerminal:
@@ -377,6 +381,11 @@ func (a *App) prefGeneral(c *ui.Context, m locales.Messages, tok theme.Tokens, s
 				*changed = true
 			}
 		})
+		g.row(m.NotificationTest(), m.NotificationTestNote(), func() {
+			if pill(c, m.SendTestNotification(), false, false, false) {
+				a.testNotification(m)
+			}
+		})
 	})
 	a.settingsSection(c, tok, icons.AppWindow, m.WindowTraySection(), func(g *settingsGroup) {
 		g.row(m.CloseBehavior(), m.CloseBehaviorNote(), func() {
@@ -408,6 +417,24 @@ func (a *App) prefGeneral(c *ui.Context, m locales.Messages, tok theme.Tokens, s
 		a.trayPreferences(c, m, g, s, changed)
 	})
 	a.updatesSection(c, m, tok, s, changed)
+	a.railSection(c, m, tok, s, changed)
+}
+
+// railSection chooses the items the right rail shows, in its order, each
+// with its icon. Hiding one keeps its pane open and its other ways in.
+func (a *App) railSection(c *ui.Context, m locales.Messages, tok theme.Tokens, s *settings.Settings, changed *bool) {
+	a.settingsSection(c, tok, icons.Rail, m.RailSection(), func(g *settingsGroup) {
+		for _, it := range railItems {
+			name := it.name(m)
+			g.row(name, "", func() {
+				on := s.RailShown(it.id)
+				if formSwitch(c.Key("railshow:"+it.id), &on).Label(name).Changed() {
+					s.SetRailShown(it.id, on)
+					*changed = true
+				}
+			}, func() { glyph(c, it.icon, tok.TextMuted, 20) })
+		}
+	})
 }
 
 func (a *App) prefAppearance(c *ui.Context, m locales.Messages, tok theme.Tokens, s *settings.Settings, changed *bool) {
@@ -502,6 +529,14 @@ func (a *App) prefTerminal(c *ui.Context, m locales.Messages, tok theme.Tokens, 
 				*changed = true
 			}
 		})
+		g.row(m.TabTitleSource(), m.TabTitleSourceNote(), func() {
+			codes := []string{"", settings.TabTitleProgram, settings.TabTitleCwd}
+			names := []string{m.TabTitleHost(), m.TabTitleProgram(), m.TabTitleCwd()}
+			cur := names[max(slices.Index(codes, s.TabTitle), 0)]
+			if formSelect(c.Key("tabtitle"), &cur, names).Label(m.TabTitleSource()).Width(180).Changed() {
+				s.TabTitle, *changed = codes[max(slices.Index(names, cur), 0)], true
+			}
+		})
 		g.row(m.TerminalFont(), "", func() {
 			if f, ok := a.fontPicker(c, "termfont", m.TerminalFont(), m.SystemDefault(), &a.fonts.termSel, s.TerminalFont, fonts.ForTerminal(a.fonts.list, s.MonospacedOnly)); ok {
 				s.TerminalFont, *changed = f, true
@@ -537,6 +572,17 @@ func (a *App) prefTerminal(c *ui.Context, m locales.Messages, tok theme.Tokens, 
 		a.termFontPreview(c, tok)
 	})
 	a.highlightSection(c, m, tok, s, changed)
+	a.settingsSection(c, tok, icons.Completion, m.CompletionSection(), func(g *settingsGroup) {
+		g.row(m.TerminalCompletion(), m.TerminalCompletionNote(), func() {
+			codes := []string{settings.CompletionOff, settings.CompletionInline, settings.CompletionAuto}
+			a.completionChoice = max(slices.Index(codes, s.TerminalCompletion), 0)
+			if formSegmented(c.Key("completion"), &a.completionChoice, false, m.CompletionOff(), m.CompletionInline(), m.CompletionAuto()).Label(m.TerminalCompletion()).Changed() {
+				if a.completionChoice >= 0 && a.completionChoice < len(codes) {
+					s.TerminalCompletion, *changed = codes[a.completionChoice], true
+				}
+			}
+		})
+	})
 	a.settingsSection(c, tok, icons.LocalShell, m.LocalTerminal(), func(g *settingsGroup) {
 		g.row(m.OpenLocalOnStart(), m.OpenLocalOnStartNote(), func() {
 			on := s.OpenLocalOnStart
@@ -578,6 +624,15 @@ func (a *App) prefTerminal(c *ui.Context, m locales.Messages, tok theme.Tokens, 
 				s.AutoReconnect = a.autoRecon
 				*changed = true
 			}
+		})
+		g.row(m.ReturnToFolder(), m.ReturnToFolderNote(), func() {
+			on := s.ReturnToFolder
+			if formSwitch(c.Key("returndir"), &on).Label(m.ReturnToFolder()).Changed() {
+				s.ReturnToFolder, *changed = on, true
+			}
+		})
+		g.row(m.TermType(), m.TermTypeNote(), func() {
+			a.termTypeRow(c, m, tok, s, changed)
 		})
 	})
 	a.settingsSection(c, tok, icons.Paste, m.ClipboardSection(), func(g *settingsGroup) {
@@ -624,6 +679,14 @@ func (a *App) prefTerminal(c *ui.Context, m locales.Messages, tok theme.Tokens, 
 			}
 		})
 	})
+	a.settingsSection(c, tok, icons.MoveTo, m.TermXferSection(), func(g *settingsGroup) {
+		g.row(m.TermXferSetting(), m.TermXferSettingNote(), func() {
+			on := s.TerminalTransfers
+			if formSwitch(c.Key("termxfer"), &on).Label(m.TermXferSetting()).Changed() {
+				s.TerminalTransfers, *changed = on, true
+			}
+		})
+	})
 }
 
 func (a *App) prefMonitoring(c *ui.Context, m locales.Messages, tok theme.Tokens, s *settings.Settings, changed *bool) {
@@ -664,6 +727,12 @@ func (a *App) prefFiles(c *ui.Context, m locales.Messages, tok theme.Tokens, s *
 			if ui.NumberInput(c.Key("conc"), &a.concChoice, 1, 10, 1).Changed() {
 				s.TransferConcurrency = int(a.concChoice)
 				*changed = true
+			}
+		})
+		g.row(m.KeepAwake(), m.KeepAwakeNote(), func() {
+			on := s.KeepAwake
+			if formSwitch(c.Key("keepawake"), &on).Label(m.KeepAwake()).Changed() {
+				s.KeepAwake, *changed = on, true
 			}
 		})
 		g.row(m.OpenConfirmMB(), m.OpenConfirmHint(), func() {
@@ -815,6 +884,9 @@ func (a *App) recordKey(m locales.Messages, ev ui.InputEvent) {
 	if key == ui.KeyUnknown {
 		key = ev.PhysicalKey
 	}
+	if key == ui.KeyUnknown {
+		return // a modifier on its own, or Caps Lock: the key comes next
+	}
 	if key == ui.KeyEscape && ev.Mods == 0 {
 		a.recording, a.recordErr = "", ""
 		return
@@ -876,6 +948,7 @@ func (a *App) aboutPage(c *ui.Context, m locales.Messages, tok theme.Tokens) {
 				}
 			}
 		})
+		a.storageRow(c, m, g)
 		if !a.kc.PasswordProtected() {
 			g.row(m.AboutSecrets(), "", value(m.SecretsKeychain()))
 			return

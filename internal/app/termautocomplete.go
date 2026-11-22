@@ -467,6 +467,9 @@ func (v *termView) acceptAutocomplete(idx int) {
 	}
 	if payload != "" {
 		b := []byte(payload)
+		if v.target != nil {
+			v.suggest.sent(v.target.Terminal(), b)
+		}
 		v.send(b)
 		v.fan(func(vt.Modes) []byte { return b })
 	}
@@ -546,7 +549,7 @@ func suggestKindBadge(k termSuggestKind, tok theme.Tokens) (string, ui.Color) {
 // termAutocompleteView renders the floating suggestion list anchored to the
 // terminal cursor inside termwrap.
 func (a *App) termAutocompleteView(c *ui.Context, cn *conn, tv *termView, termBounds ui.Rect, focused bool, tok theme.Tokens) {
-	if !focused || !tv.acOpen() {
+	if !focused || !tv.acOpen() || tv.suggest.list.shows() {
 		return
 	}
 	tv.metrics(1)

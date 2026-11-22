@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/Licoy/sshyard/internal/assets"
+	"github.com/Licoy/sshyard/internal/cmdline"
 	"github.com/Licoy/sshyard/internal/session"
+	"github.com/Licoy/sshyard/internal/settings"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -107,5 +109,44 @@ func TestTerminalAutocompleteSuggestionsAndCompletion(t *testing.T) {
 	cn.tv.input(ui.InputEvent{Kind: ui.InputKeyDown, Key: ui.KeyEscape}, a.svc)
 	if cn.tv.acOpen() {
 		t.Fatal("autocomplete popup still open after Escape")
+	}
+}
+
+func TestTerminalAutocompleteCoexistsWithSuggest(t *testing.T) {
+	// When upstream's path list is open alongside acItems, Down/Enter drive the path list.
+	r := newSuggestRig(settings.CompletionAuto)
+	r.src.es = []cmdline.Entry{{Name: "Makefile"}, {Name: "main.go"}}
+	r.text("cat ")
+	r.frame(true)
+	if !r.tv.suggest.list.shows() {
+		t.Fatal("expected upstream path list to be open")
+	}
+	r.tv.acItems = []termSuggestion{{Kind: suggestLinux, Cmd: "cat /etc/hosts"}}
+	r.tv.acDismissed = false
+	r.key(ui.KeyDown, 0)
+	n := len(r.out)
+	r.key(ui.KeyEnter, 0)
+	if got := r.sentSince(n); got != "Makefile" {
+		t.Fatalf("path list Enter sent %q, want %q", got, "Makefile")
+	}
+	if r.tv.acOpen() {
+		t.Fatal("expected custom autocomplete to reset after path list completion")
+	}
+
+	// When only inline ghost text and custom autocomplete are active, Right accepts ghost text.
+	r = newSuggestRig(settings.CompletionInline)
+	r.src.cmds = []string{"git status"}
+	r.text("git s")
+	r.frame(false)
+	if !r.tv.acOpen() || r.tv.suggest.ghost != "tatus" {
+		t.Fatalf("acOpen=%v ghost=%q, want both active", r.tv.acOpen(), r.tv.suggest.ghost)
+	}
+	n = len(r.out)
+	r.key(ui.KeyRight, 0)
+	if got := r.sentSince(n); got != "tatus" {
+		t.Fatalf("Right sent %q, want %q", got, "tatus")
+	}
+	if r.tv.acOpen() {
+		t.Fatal("expected custom autocomplete to reset after accepting ghost suggestion")
 	}
 }

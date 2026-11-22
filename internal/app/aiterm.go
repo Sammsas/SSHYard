@@ -30,10 +30,25 @@ func aiTarget(h assets.Host) agent.Target {
 	}
 }
 
-// aiEngine grades c's actions: a device's command line has its own rules.
+// aiTargetOf is what c's assistant reaches: aiTarget, or an SSH host's
+// linked terminal while the pane types into it.
+func aiTargetOf(c *conn) agent.Target {
+	t := aiTarget(c.host)
+	if t == agent.TargetSSH && c.ai != nil && c.ai.inTerm {
+		return agent.TargetSSHTerminal
+	}
+	return t
+}
+
+// aiEngine grades c's actions: a device's command line has its own rules,
+// and what is typed into an SSH host's terminal switched to root is
+// graded as sudo would make it.
 func aiEngine(c *conn) policy.Engine {
-	if aiTarget(c.host) == agent.TargetDevice {
+	switch aiTargetOf(c) {
+	case agent.TargetDevice:
 		return policy.NewDeviceEngine()
+	case agent.TargetSSHTerminal:
+		return policy.NewRootEngine(c.ai.user.root.Load)
 	}
 	return nil
 }
@@ -60,13 +75,19 @@ var errNoFiles = errors.New("this assistant has no file access: it types into th
 // termTools is the tool layer of an assistant on a Telnet, serial or
 // local terminal: it reads the pane's linked terminal and types into it.
 type termTools struct {
-	a       *App
-	c       *conn
+	a *App
+	c *conn
+	// state is c's assistant as the tools were made, which an SSH host's
+	// tools (ssh) tell who runs the terminal after each line.
+	state   *aiState
+	ssh     bool
 	counted bool
 	nbytes  int64
 }
 
-func newTermTools(a *App, c *conn) *termTools { return &termTools{a: a, c: c} }
+func newTermTools(a *App, c *conn) *termTools {
+	return &termTools{a: a, c: c, state: c.ai, ssh: aiTargetOf(c) == agent.TargetSSHTerminal}
+}
 
 // OutputBytes is what the last line or key printed; negative when the
 // last call typed nothing.
@@ -104,7 +125,10 @@ func (t *termTools) Call(ctx context.Context, name string, raw json.RawMessage) 
 	default:
 		return "unknown tool " + name, 1, nil
 	}
-	s := t.linked()
+	s := t.linked(ctx)
+	if err := ctx.Err(); err != nil {
+		return "", -1, err
+	}
 	if s == nil {
 		return "no terminal is linked: the user opens this host's terminal in the assistant's tab", 1, nil
 	}
@@ -119,6 +143,11 @@ func (t *termTools) Call(ctx context.Context, name string, raw json.RawMessage) 
 		res, err = console.Line(ctx, term, args.Command, o)
 	} else {
 		res, err = console.Key(ctx, term, args.Key, o)
+	}
+	if t.ssh && ctx.Err() == nil {
+		// What was typed may have been su or exit: the next line is
+		// graded as whoever runs the terminal now.
+		t.a.readTermUser(ctx, t.state, s, "")
 	}
 	return t.result(ctx, res, err)
 }
@@ -135,10 +164,13 @@ func (t *termTools) result(ctx context.Context, res console.Result, err error) (
 	if res.Output != "" {
 		text += "\n" + res.Output
 	}
-	if ctx.Err() != nil {
-		return text, -1, ctx.Err()
+	if errors.Is(err, console.ErrStopUnconfirmed) {
+		return text, -1, err
 	}
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return text, -1, ctxErr
+		}
 		return joinOut(text, err.Error()), 1, nil
 	}
 	switch res.Status {
@@ -150,7 +182,7 @@ func (t *termTools) result(ctx context.Context, res console.Result, err error) (
 
 // linked is the session of the terminal the pane is linked to, read on
 // the UI thread; nil when there is none.
-func (t *termTools) linked() *session.Session {
+func (t *termTools) linked(ctx context.Context) *session.Session {
 	ch := make(chan *session.Session, 1)
 	t.a.post(func() {
 		var s *session.Session
@@ -166,6 +198,8 @@ func (t *termTools) linked() *session.Session {
 	select {
 	case s := <-ch:
 		return s
+	case <-ctx.Done():
+		return nil
 	case <-timer.C:
 		return nil
 	}
@@ -174,12 +208,12 @@ func (t *termTools) linked() *session.Session {
 // sessionTerm is a session as a console.Terminal.
 type sessionTerm struct{ s *session.Session }
 
-func (t sessionTerm) Input() (io.Writer, error) {
+func (t sessionTerm) Input(ctx context.Context) (io.Writer, error) {
 	w, err := t.s.CaptureInput()
 	if err != nil {
 		return nil, err
 	}
-	return busyWriter{w}, nil
+	return busyWriter{w: w, ctx: ctx}, nil
 }
 
 func (t sessionTerm) Watch(fn func([]byte)) func() { return t.s.Watch(fn) }
@@ -190,15 +224,25 @@ func (t sessionTerm) FullScreen() bool { return t.s.Term.Modes().AltScreen }
 
 // busyWriter waits out a paste being written, as the user's own typing
 // would, for up to two seconds.
-type busyWriter struct{ w io.Writer }
+type busyWriter struct {
+	w   io.Writer
+	ctx context.Context
+}
 
 func (b busyWriter) Write(p []byte) (int, error) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
+		if err := b.ctx.Err(); err != nil {
+			return 0, err
+		}
 		n, err := b.w.Write(p)
 		if !errors.Is(err, session.ErrInputBusy) || time.Now().After(deadline) {
 			return n, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-b.ctx.Done():
+			return 0, b.ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }

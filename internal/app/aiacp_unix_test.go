@@ -169,6 +169,147 @@ func TestACPAppProtocolAndLifecycle(t *testing.T) {
 		a.SendAI(id, "hello")
 		waitFor(t, tt, "ACP authentication error", func() bool { return !a.conns[id].ai.running && tt.HasText(locales.In("en").AiACPAuthRequired()) })
 	})
+	t.Run("conversation-carried-on", func(t *testing.T) {
+		a, tt, _, h := bashHost(t)
+		script := filepath.Join(t.TempDir(), "script")
+		write := func(body string) {
+			if err := os.WriteFile(script, []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("load\nreplay replayed answer\n---\nmessage answered\n")
+		s := a.Settings()
+		s.AIDefaultAgent = "acp"
+		s.AIACPAgents = []settings.ACPConfig{{Command: binary, Args: []string{script}}}
+		if err := a.ApplySettings(s); err != nil {
+			t.Fatal(err)
+		}
+		id := openAIPane(t, a, h.ID)
+		c := a.conns[id]
+		ask := func(q string) *acpRuntime {
+			t.Helper()
+			a.SendAI(id, q)
+			r := c.ai.acp
+			waitFor(t, tt, "answer to "+q, func() bool { return !c.ai.running })
+			if r == nil || c.ai.acp != r {
+				t.Fatalf("%q: runtime closed: %+v", q, c.ai.items)
+			}
+			return r
+		}
+		first := ask("first question")
+		cwd := first.session.Sandbox()
+		if c.ai.acpSID != "sess-fake" || c.ai.acpCwd != cwd || c.ai.acpAgent != c.ai.agent {
+			t.Fatalf("session %q of %q in %q", c.ai.acpSID, c.ai.acpAgent, c.ai.acpCwd)
+		}
+		if d := first.session.Diagnostics(); strings.Contains(d, "sshyard://conversation") {
+			t.Fatalf("a new conversation was told an earlier one: %s", d)
+		}
+		conv := c.ai.conv
+		if saved, err := a.chatHistory().Load(h.ID, conv); err != nil || saved.ACP == nil || saved.ACP.ID != "sess-fake" || saved.ACP.Cwd != cwd {
+			t.Fatalf("saved session %+v, %v", saved.ACP, err)
+		}
+
+		// Reopened, the agent loads its session in its sandbox; what it
+		// replays is not shown again and it is not told the conversation.
+		a.NewChat(id)
+		a.OpenChat(id, conv)
+		if c.ai.acpSID != "sess-fake" {
+			t.Fatalf("reopened without its session: %q", c.ai.acpSID)
+		}
+		second := ask("second question")
+		d := second.session.Diagnostics()
+		if !second.session.Resumed() || !strings.Contains(d, "load sess-fake cwd "+cwd) || strings.Contains(d, "sshyard://conversation") {
+			t.Fatalf("not resumed: %s", d)
+		}
+		if paneHas(a, id, "replayed answer") || !paneHas(a, id, "first question") {
+			t.Fatalf("pane %+v", c.ai.items)
+		}
+
+		// An agent that cannot load is told the conversation, once.
+		write("---\nmessage answered\n")
+		a.StopAI(id)
+		third := ask("third question")
+		ask("fourth question")
+		d = third.session.Diagnostics()
+		if third.session.Resumed() || strings.Contains(d, "load ") || strings.Count(d, "sshyard://conversation") != 1 ||
+			!strings.Contains(d, "User: first question") || !strings.Contains(d, "User: second question") {
+			t.Fatalf("not told the conversation once: %s", d)
+		}
+		if strings.Contains(d, "User: third question") {
+			t.Fatalf("told the question it is asked: %s", d)
+		}
+	})
+	t.Run("send-now-cancels-approval-and-resumes", func(t *testing.T) {
+		a, tt, _, h := bashHost(t)
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(root, "config")
+		if err := os.WriteFile(target, []byte("before"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		script := filepath.Join(root, "script")
+		write := func(body string) {
+			t.Helper()
+			if err := os.WriteFile(script, []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("load\n---\nmessage original answer\ntool original tool\nwrite " + target + " denied\nmessage late answer\n")
+		s := a.Settings()
+		s.AIDefaultAgent = "acp"
+		s.AIACPAgents = []settings.ACPConfig{{Command: binary, Args: []string{script}}}
+		if err := a.ApplySettings(s); err != nil {
+			t.Fatal(err)
+		}
+		id := openAIPane(t, a, h.ID)
+		c := a.conns[id]
+		a.SendAI(id, "original question")
+		waitFor(t, tt, "original approval pending", func() bool {
+			return c.ai.pending != nil && paneHas(a, id, "original answer")
+		})
+		old := c.ai.acp
+		sid := old.session.ID()
+		write("load\nreplay hidden replay\n---\ntool replacement tool\nmessage replacement answer\n")
+		c.ai.input = "replacement question"
+		a.sendAI(c)
+		waitFor(t, tt, "replacement turn completed", func() bool {
+			if c.ai.acp != nil && c.ai.acp != old {
+				select {
+				case <-old.gone:
+				default:
+					t.Fatal("replacement started before old ACP cleanup completed")
+				}
+			}
+			return !c.ai.running && paneHas(a, id, "replacement answer")
+		})
+		next := c.ai.acp
+		if next == nil || next == old || !next.session.Resumed() || next.session.ID() != sid {
+			t.Fatalf("replacement did not resume the conversation in a new process: %+v", c.ai.items)
+		}
+		if data, err := os.ReadFile(target); err != nil || string(data) != "before" {
+			t.Fatalf("unapproved write changed file: %q, %v", data, err)
+		}
+		var interrupted, replacement int
+		var tools []string
+		for _, item := range c.ai.items {
+			switch item.kind {
+			case "interrupted":
+				interrupted++
+			case "user":
+				if item.text == "replacement question" {
+					replacement++
+				}
+			case "tool":
+				tools = append(tools, item.tool.Name)
+			}
+		}
+		if interrupted != 1 || replacement != 1 || strings.Join(tools, ",") != "original tool,replacement tool" ||
+			paneHas(a, id, "late answer") || paneHas(a, id, "hidden replay") || c.ai.pending != nil {
+			t.Fatalf("incorrect ACP handoff timeline: %+v", c.ai.items)
+		}
+	})
 	t.Run("scope-update-cancels-process", func(t *testing.T) {
 		a, tt, _, h := bashHost(t)
 		script := filepath.Join(t.TempDir(), "script")

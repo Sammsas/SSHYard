@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -136,6 +137,47 @@ const (
 // server refuses that session, or it breaks (a protocol error, from the
 // folder it broke in on), is each folder read whole first.
 func (c *Client) PlanDownload(ctx context.Context, srcs []string, localDir string) ([]Item, []Skip, error) {
+	return c.planRemote(ctx, srcs, planTarget{
+		name: SafeName,
+		dst:  func(rel string) (string, error) { return LocalPath(localDir, rel) },
+		exists: func(p string) (bool, error) {
+			_, err := os.Lstat(p)
+			return err == nil, nil
+		},
+	})
+}
+
+// PlanRelay lists what copying the paths of this server into remoteDir
+// on the server of to copies, as PlanDownload does for a local folder:
+// the same walk, links, limits and skips, but names are checked as names
+// on a server (RemoteName: a single name, without "/", "\" or NUL), as
+// any other is allowed there. Where each item goes stays in remoteDir.
+// to may be c itself (another folder of the same server).
+func (c *Client) PlanRelay(ctx context.Context, srcs []string, to *Client, remoteDir string) ([]Item, []Skip, error) {
+	return c.planRemote(ctx, srcs, planTarget{
+		name: RemoteName,
+		dst:  func(rel string) (string, error) { return RemotePath(remoteDir, rel) },
+		exists: func(p string) (bool, error) {
+			_, err := withCtx(ctx, func() (os.FileInfo, error) { return to.c.Lstat(p) })
+			if cerr := ctx.Err(); cerr != nil {
+				return false, cerr
+			}
+			return err == nil, nil
+		},
+	})
+}
+
+// planTarget is where a plan of a server's paths copies them to: name
+// checks each name the server sent, dst makes a path below the folder
+// chosen, and exists says something is already at one.
+type planTarget struct {
+	name   func(string) error
+	dst    func(rel string) (string, error)
+	exists func(p string) (bool, error)
+}
+
+// planRemote is PlanDownload and PlanRelay, to the target to.
+func (c *Client) planRemote(ctx context.Context, srcs []string, to planTarget) ([]Item, []Skip, error) {
 	var (
 		out     []Item
 		skips   []Skip
@@ -164,13 +206,13 @@ func (c *Client) PlanDownload(ctx context.Context, srcs []string, localDir strin
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// The names come from the server: each must be safe as a local
-		// name, and where it goes must stay in localDir.
-		if SafeName(path.Base(rel)) != nil {
+		// The names come from the server: each must be safe where it
+		// goes, and where it goes must stay in the folder chosen.
+		if to.name(path.Base(rel)) != nil {
 			skips = append(skips, Skip{Src: p, Rel: rel, Reason: SkipName})
 			return nil
 		}
-		dst, err := LocalPath(localDir, rel)
+		dst, err := to.dst(rel)
 		if err != nil {
 			return fmt.Errorf("sftp: %w", err)
 		}
@@ -191,8 +233,9 @@ func (c *Client) PlanDownload(ctx context.Context, srcs []string, localDir strin
 		it := Item{Src: p, Dst: dst, Rel: rel, IsDir: fi.IsDir()}
 		if !it.IsDir {
 			it.Size = fi.Size()
-			_, err := os.Lstat(dst)
-			it.Exists = err == nil
+			if it.Exists, err = to.exists(dst); err != nil {
+				return err
+			}
 			out = append(out, it)
 			return nil
 		}
@@ -255,7 +298,7 @@ func (c *Client) PlanDownload(ctx context.Context, srcs []string, localDir strin
 		// server that treats it as a separator, so the stat would miss
 		// the file instead of leaving it out.
 		base := path.Base(src)
-		if SafeName(base) != nil {
+		if to.name(base) != nil {
 			skips = append(skips, Skip{Src: src, Rel: base, Reason: SkipName})
 			continue
 		}
@@ -477,27 +520,24 @@ func (c *Client) readFileContext(ctx context.Context, p string, limit int64, noL
 	if limit <= 0 || limit > 1<<30 {
 		return nil, Version{}, ErrReadLimit
 	}
-	sub, err := c.operationClient(ctx)
+	var data []byte
+	var ver Version
+	err := c.withOperation(ctx, true, func(sub *Client) error {
+		p := p
+		if noLinks {
+			var err error
+			if p, err = sub.resolvePath(ctx, p); err != nil {
+				return err
+			}
+		}
+		var err error
+		data, ver, err = sub.readBounded(p, limit)
+		return err
+	})
 	if err != nil {
 		return nil, Version{}, err
 	}
-	defer sub.Close()
-	stop := context.AfterFunc(ctx, func() { sub.Close() })
-	defer stop()
-	if noLinks {
-		p, err = sub.resolvePath(ctx, p)
-		if err != nil {
-			if ctx.Err() != nil {
-				err = ctx.Err()
-			}
-			return nil, Version{}, err
-		}
-	}
-	data, ver, err := sub.readBounded(p, limit)
-	if ctx.Err() != nil {
-		return nil, Version{}, ctx.Err()
-	}
-	return data, ver, err
+	return data, ver, nil
 }
 
 func (c *Client) readBounded(p string, limit int64) ([]byte, Version, error) {
@@ -511,12 +551,12 @@ func (c *Client) readBounded(p string, limit int64) ([]byte, Version, error) {
 		return nil, Version{}, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, Version{}, errors.New("sftp: not a regular file")
+		return nil, Version{}, errNotRegular
 	}
 	if fi.Size() < 0 || fi.Size() > limit {
 		return nil, Version{}, ErrReadLimit
 	}
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	data, err := readUpTo(f, fi.Size()+1, limit+1)
 	if err != nil {
 		return nil, Version{}, err
 	}
@@ -531,6 +571,40 @@ func (c *Client) readBounded(p string, limit int64) ([]byte, Version, error) {
 		return nil, Version{}, ErrChanged
 	}
 	return data, Version{Size: fi.Size(), ModTime: fi.ModTime()}.withSum(data), nil
+}
+
+// errNotRegular is a file read that is not a regular file.
+var errNotRegular = errors.New("sftp: not a regular file")
+
+// readUpTo reads r to its end, but n bytes at most, into a buffer made
+// for size bytes (capped at n) first: pkg/sftp sends one large Read as
+// concurrent requests, where io.ReadAll's small first reads take a round
+// trip each. More bytes than size grow the buffer, never past n.
+func readUpTo(r io.Reader, size, n int64) ([]byte, error) {
+	buf := make([]byte, 0, min(max(size, 0), n))
+	for int64(len(buf)) < n {
+		if len(buf) == cap(buf) {
+			buf = slices.Grow(buf, int(min(max(int64(cap(buf)), 512), n-int64(len(buf)))))
+		}
+		got, err := r.Read(buf[len(buf):min(int64(cap(buf)), n)])
+		buf = buf[:len(buf)+got]
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return buf, err
+		}
+	}
+	return buf, nil
+}
+
+// readSmall is readUpTo of the remote file f, sized by its fstat.
+func readSmall(f *sftp.File, n int64) ([]byte, error) {
+	var size int64
+	if fi, err := f.Stat(); err == nil {
+		size = fi.Size() + 1 // + 1 to read the end at once
+	}
+	return readUpTo(f, size, n)
 }
 
 // Version is the remote file's version now.
@@ -571,18 +645,15 @@ func (c *Client) WriteFileNoLinks(p string, data []byte, was Version) (Version, 
 // WriteFileNoLinksContext keeps validation and atomic replacement on a dedicated
 // cancellable session. Cancellation cannot undo a rename already completed.
 func (c *Client) WriteFileNoLinksContext(ctx context.Context, p string, data []byte, was Version) (Version, error) {
-	sub, err := c.operationClient(ctx)
+	var ver Version
+	err := c.withOperation(ctx, false, func(sub *Client) (err error) {
+		ver, err = sub.writeFileContext(ctx, p, data, was, true)
+		return err
+	})
 	if err != nil {
 		return Version{}, err
 	}
-	defer sub.Close()
-	stop := context.AfterFunc(ctx, func() { sub.Close() })
-	defer stop()
-	ver, err := sub.writeFileContext(ctx, p, data, was, true)
-	if ctx.Err() != nil {
-		return Version{}, ctx.Err()
-	}
-	return ver, err
+	return ver, nil
 }
 
 func (c *Client) writeFile(p string, data []byte, was Version, noLinks bool) (Version, error) {

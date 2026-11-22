@@ -61,7 +61,9 @@ func typesText(k ui.Key) bool {
 }
 
 // EncodeKey returns what a key pressed in the terminal sends to the
-// program, as xterm sends it, and false for keys it leaves: keys that type
+// program, as xterm sends it (the Linux console's F1–F5, Home and End when
+// m.LinuxKeys, without modifiers; BS for Backspace and DEL with Ctrl when
+// m.BackspaceBS), and false for keys it leaves: keys that type
 // text (the text comes after them, InputText) and the app's own shortcuts.
 // Cmd+Left and Cmd+Right (the Windows key elsewhere, when the system lets
 // it through) go to the line's start and end, as Home and End.
@@ -105,7 +107,7 @@ func EncodeKey(k ui.Key, mods ui.Modifiers, m vt.Modes) ([]byte, bool) {
 	case ui.KeyEnter:
 		return esc([]byte{'\r'}), true
 	case ui.KeyBackspace:
-		if mods&ui.Ctrl != 0 {
+		if (mods&ui.Ctrl != 0) != m.BackspaceBS {
 			return esc([]byte{0x08}), true
 		}
 		return esc([]byte{0x7f}), true
@@ -125,8 +127,14 @@ func EncodeKey(k ui.Key, mods ui.Modifiers, m vt.Modes) ([]byte, bool) {
 	case ui.KeyLeft:
 		return cursor('D', m.AppCursorKeys), true
 	case ui.KeyHome:
+		if m.LinuxKeys && mod == 1 {
+			return tilde(1), true
+		}
 		return cursor('H', m.AppCursorKeys), true
 	case ui.KeyEnd:
+		if m.LinuxKeys && mod == 1 {
+			return tilde(4), true
+		}
 		return cursor('F', m.AppCursorKeys), true
 	case ui.KeyInsert:
 		return tilde(2), true
@@ -139,6 +147,9 @@ func EncodeKey(k ui.Key, mods ui.Modifiers, m vt.Modes) ([]byte, bool) {
 	}
 	if k >= ui.KeyF1 && k <= ui.KeyF12 {
 		n := int(k - ui.KeyF1)
+		if m.LinuxKeys && mod == 1 && n < 5 {
+			return []byte{0x1b, '[', '[', "ABCDE"[n]}, true
+		}
 		if n < 4 {
 			return cursor("PQRS"[n], true), true
 		}
@@ -198,7 +209,7 @@ func pasteBytes(text string, m vt.Modes) []byte {
 }
 
 // appMods are the modifiers of SSHYard's own shortcuts: Cmd on macOS, and
-// Ctrl+Shift elsewhere, since Ctrl alone belongs to the shell.
+// Ctrl+Shift elsewhere, leaving plain Ctrl combinations to the terminal.
 var appMods = func() ui.Modifiers {
 	if runtime.GOOS == "darwin" {
 		return ui.Super

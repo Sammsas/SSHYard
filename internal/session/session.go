@@ -45,7 +45,8 @@ type Options struct {
 	// Backoff is the first retry delay, doubled each attempt up to
 	// MaxBackoff; 0 are 1 and 30 seconds.
 	Backoff, MaxBackoff time.Duration
-	// Term is the TERM to request; "" is xterm-256color.
+	// Term is the TERM to request; "" (or one TermOK refuses) is
+	// DefaultTerm. The Linux console's ("linux") sends its keys too.
 	Term string
 	// Scrollback is the terminal's scrollback; 0 is vt.DefaultScrollback.
 	Scrollback int
@@ -72,6 +73,9 @@ type Options struct {
 	// LocalEcho shows what is typed on an opened stream, for a device
 	// that does not echo it.
 	LocalEcho bool
+	// BackspaceBS makes Backspace send BS (^H) rather than DEL
+	// (vt.Modes.BackspaceBS).
+	BackspaceBS bool
 	// Dir is the folder an SSH shell goes to each time it starts: a cd
 	// typed once the shell has gone quiet (enterShell). "~" or "~/…" is
 	// under the home folder.
@@ -139,6 +143,14 @@ type Session struct {
 	// processes.
 	tag    string
 	tagged bool
+	// enters counts the input holding an Enter (Enters).
+	enters atomic.Uint64
+	// cwdMu runs one ProbeCwd at a time, on cwdSh, the probe shell kept
+	// open on the connection; noCwdSh is a connection one could not
+	// start on. Both are under mu.
+	cwdMu   sync.Mutex
+	cwdSh   *cwdShell
+	noCwdSh *ssh.Client
 	// tap, when set, is given what the shell writes to the terminal, as
 	// it comes, after the terminal took it (SetOutputTap).
 	tap atomic.Pointer[func([]byte)]
@@ -149,6 +161,15 @@ type Session struct {
 	// outAt is when the shell last wrote to the terminal, in Unix
 	// nanoseconds, 0 before its first output.
 	outAt atomic.Int64
+	// takeover finds transfers in the output (SetTakeover).
+	takeover atomic.Pointer[Takeover]
+	// outMu orders the output: the terminal, or the transfer that took
+	// the stream over (taken), gets it in order. tail is the end of what
+	// the terminal last got. taken changes holding outMu, and is read
+	// without it too: the output may be stuck in the terminal holding it.
+	outMu sync.Mutex
+	taken atomic.Pointer[takenOver]
+	tail  []byte
 }
 
 // New returns a session of cols×rows; Start connects it.
@@ -165,11 +186,13 @@ func New(cfg Config, opts Options, cols, rows int) *Session {
 	if opts.MaxBackoff == 0 {
 		opts.MaxBackoff = 30 * time.Second
 	}
-	if opts.Term == "" {
-		opts.Term = "xterm-256color"
+	if !TermOK(opts.Term) {
+		opts.Term = DefaultTerm
 	}
 	s := &Session{cfg: cfg, opts: opts, cols: max(cols, 1), rows: max(rows, 1), wake: make(chan struct{}, 1), done: make(chan struct{}), probeNote: make(chan struct{}, 1), tag: newTag()}
 	s.Term = vt.New(s.cols, s.rows)
+	s.Term.SetLinuxKeys(linuxTerm(opts.Term))
+	s.Term.SetBackspaceBS(opts.BackspaceBS)
 	if opts.Scrollback > 0 {
 		s.Term.SetScrollback(opts.Scrollback)
 	}
@@ -312,6 +335,7 @@ func (s *Session) Close() {
 	if stream != nil {
 		stream.Close()
 	}
+	s.endTakeover()
 	s.changed()
 }
 
@@ -489,31 +513,81 @@ func (s *Session) connect(ctx context.Context) error {
 		s.changed()
 		return nil
 	}
-	shell, err := client.NewSession()
-	if err != nil {
-		// A shared connection that cannot open a channel is gone.
+	// A server that leaves a request unanswered would keep the session
+	// connecting forever: past shellWait its connection goes.
+	watch := time.AfterFunc(shellWait, func() {
 		s.broken(client)
-		release()
-		return err
+		client.Close()
+	})
+	shell, stdin, tagged, err := s.startShell(client)
+	if !watch.Stop() {
+		if err == nil {
+			shell.Close()
+		}
+		err = ErrNoShell
 	}
-	fail := func(err error) error {
-		shell.Close()
+	if err != nil {
 		release()
 		return err
 	}
 	s.mu.Lock()
-	cols, rows := s.cols, s.rows
-	s.mu.Unlock()
-	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 115200, ssh.TTY_OP_OSPEED: 115200}
-	if err := shell.RequestPty(s.opts.Term, rows, cols, modes); err != nil {
-		return fail(err)
+	if s.closed {
+		s.mu.Unlock()
+		shell.Close()
+		release()
+		return context.Canceled
 	}
-	// Servers take LC_* by default (AcceptEnv): one that does not just
-	// leaves the shell untagged.
-	tagged := shell.Setenv(TagEnv, s.tag) == nil
+	s.client, s.release, s.shell, s.stdin, s.tagged = client, release, shell, &serializedInput{WriteCloser: stdin, enters: &s.enters}, tagged
+	s.status.State, s.status.Err, s.status.Attempt = Connected, nil, 0
+	s.status.Connects++
+	s.mu.Unlock()
+	if s.opts.Dir != "" || s.opts.Start != nil {
+		go s.enterShell(ctx, client, shell, time.Now())
+	}
+	s.changed()
+	return nil
+}
+
+// envWait is how long a new shell waits at least for the answer to its
+// env request (TagEnv), or envRTTs round trips of its pty-req when that
+// is longer. shellWait bounds starting the shell once connected.
+var (
+	envWait   = 2 * time.Second
+	shellWait = 30 * time.Second
+)
+
+const envRTTs = 4
+
+// noEnv are the servers, by address, that left an env request
+// unanswered: their shells start without one, untagged.
+var noEnv sync.Map // Addr → struct{}
+
+// startShell starts the shell on client, on a PTY of the terminal's size,
+// its environment tagged when the server takes TagEnv. It closes the
+// channels it opened when it fails.
+func (s *Session) startShell(client *ssh.Client) (*ssh.Session, io.WriteCloser, bool, error) {
+	shell, rtt, err := s.openPTY(client)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	tagged := false
+	if _, skip := noEnv.Load(s.cfg.Addr); !skip {
+		var answered bool
+		if tagged, answered = s.setTag(shell, rtt); !answered {
+			// The server left it unanswered (warpgate): the channel
+			// waits for that answer before taking another request, so
+			// the shell starts on a new one.
+			noEnv.Store(s.cfg.Addr, struct{}{})
+			shell.Close()
+			if shell, _, err = s.openPTY(client); err != nil {
+				return nil, nil, false, err
+			}
+		}
+	}
 	stdin, err := shell.StdinPipe()
 	if err != nil {
-		return fail(err)
+		shell.Close()
+		return nil, nil, false, err
 	}
 	out := &termWriter{s: s}
 	shell.Stdout = out
@@ -524,22 +598,49 @@ func (s *Session) connect(ctx context.Context) error {
 	s.Term.ResetInputModes(true)
 	s.outAt.Store(0)
 	if err := shell.Shell(); err != nil {
-		return fail(err)
+		shell.Close()
+		return nil, nil, false, err
+	}
+	return shell, stdin, tagged, nil
+}
+
+// openPTY opens a session channel on client with a PTY of the terminal's
+// size, and returns the round trip of the PTY request.
+func (s *Session) openPTY(client *ssh.Client) (*ssh.Session, time.Duration, error) {
+	shell, err := client.NewSession()
+	if err != nil {
+		// A shared connection that cannot open a channel is gone.
+		s.broken(client)
+		return nil, 0, err
 	}
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return fail(context.Canceled)
-	}
-	s.client, s.release, s.shell, s.stdin, s.tagged = client, release, shell, &serializedInput{WriteCloser: stdin}, tagged
-	s.status.State, s.status.Err, s.status.Attempt = Connected, nil, 0
-	s.status.Connects++
+	cols, rows := s.cols, s.rows
 	s.mu.Unlock()
-	if s.opts.Dir != "" || s.opts.Start != nil {
-		go s.enterShell(ctx, client, shell, time.Now())
+	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 115200, ssh.TTY_OP_OSPEED: 115200}
+	start := time.Now()
+	if err := shell.RequestPty(s.opts.Term, rows, cols, modes); err != nil {
+		shell.Close()
+		return nil, 0, err
 	}
-	s.changed()
-	return nil
+	return shell, time.Since(start), nil
+}
+
+// setTag asks the server to put the tag in shell's environment, and
+// reports whether it took it and whether it answered within envWait, or
+// envRTTs times rtt.
+func (s *Session) setTag(shell *ssh.Session, rtt time.Duration) (tagged, answered bool) {
+	got := make(chan bool, 1)
+	// Servers take LC_* by default (AcceptEnv): one that does not just
+	// leaves the shell untagged.
+	go func() { got <- shell.Setenv(TagEnv, s.tag) == nil }()
+	t := time.NewTimer(max(envWait, envRTTs*rtt))
+	defer t.Stop()
+	select {
+	case tagged = <-got:
+		return tagged, true
+	case <-t.C:
+		return false, false
+	}
 }
 
 // dirQuiet is how long a new shell prints nothing before enterShell takes
@@ -590,16 +691,20 @@ func (s *Session) enterShell(ctx context.Context, client *ssh.Client, shell *ssh
 // Its leading space keeps it out of the history of shells that ignore
 // such lines.
 func cdLine(dir string) string {
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-	arg := quote(dir)
+	arg := ShellQuote(dir)
 	switch {
 	case dir == "~":
 		arg = "~"
 	case strings.HasPrefix(dir, "~/"):
-		arg = "~/" + quote(dir[2:])
+		arg = "~/" + ShellQuote(dir[2:])
 	}
 	return " cd " + arg + "\r"
 }
+
+// ShellQuote is s as one word for a POSIX shell: single-quoted, each
+// single quote in it closed, escaped and opened again. fish reads it the
+// same unless s holds a backslash.
+func ShellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // serve waits for the shell to end. It returns nil when the shell exited
 // and the error when the connection was lost.
@@ -646,6 +751,7 @@ func (s *Session) serve(ctx context.Context) error {
 		err = errors.Join(errConnectionLost, e)
 	case <-ctx.Done():
 	}
+	s.endTakeover()
 	// What the program asked of the mouse goes with it.
 	s.Term.ResetInputModes(false)
 	if err != nil {
@@ -656,9 +762,13 @@ func (s *Session) serve(ctx context.Context) error {
 		shell.Close()
 	}
 	s.mu.Lock()
-	release := s.release
+	release, sh := s.release, s.cwdSh
 	s.client, s.release, s.shell, s.stdin = nil, nil, nil, nil
+	s.cwdSh, s.noCwdSh = nil, nil
 	s.mu.Unlock()
+	if sh != nil {
+		sh.close()
+	}
 	if release != nil {
 		release()
 	}
@@ -813,7 +923,46 @@ type termWriter struct {
 }
 
 func (w *termWriter) Write(p []byte) (int, error) {
-	n, err := w.s.Term.Write(p)
+	s := w.s
+	for {
+		s.outMu.Lock()
+		t := s.taken.Load()
+		if t == nil {
+			err := w.show(p)
+			s.outMu.Unlock()
+			return len(p), err
+		}
+		s.outMu.Unlock()
+		if t.q.Add(p) {
+			s.outAt.Store(time.Now().UnixNano())
+			return len(p), nil
+		}
+		// The transfer ended: what it left goes to the terminal first.
+		<-t.done
+	}
+}
+
+// show gives p to the terminal, or from where a transfer starts in it,
+// to the transfer. Called holding outMu.
+func (w *termWriter) show(p []byte) error {
+	if fn := w.s.takeover.Load(); fn != nil {
+		if before, from, run := w.s.find(*fn, p); run != nil {
+			if len(before) > 0 {
+				w.print(before)
+			}
+			if w.s.startTakeover(from, run) {
+				w.s.changed()
+				return nil
+			}
+			p = from
+		}
+	}
+	w.s.keepTail(p)
+	return w.print(p)
+}
+
+func (w *termWriter) print(p []byte) error {
+	_, err := w.s.Term.Write(p)
 	if tap := w.s.tap.Load(); tap != nil {
 		(*tap)(p)
 	}
@@ -829,5 +978,5 @@ func (w *termWriter) Write(p []byte) (int, error) {
 			w.in.answer(answer)
 		}
 	}
-	return n, err
+	return err
 }

@@ -277,3 +277,88 @@ func TestLocalKeysBeforeQuestions(t *testing.T) {
 		t.Fatalf("asked %+v", rec.asked)
 	}
 }
+
+// TestUnlistedKbd: after refused keys, the keyboard-interactive login is
+// tried once though the server does not list it (a JumpServer before
+// v3.7), never ahead of a password left to try or of x/crypto's own pick.
+func TestUnlistedKbd(t *testing.T) {
+	kbd := ssh.KeyboardInteractive(nil)
+	for _, c := range []struct {
+		name                    string
+		password                bool
+		tried, allowed, partial []string
+		want                    bool
+	}{
+		{name: "before the keys", tried: []string{"none"}, allowed: []string{"publickey", "password"}},
+		{name: "keys refused", tried: []string{"none", "publickey"}, allowed: []string{"publickey", "password"}, want: true},
+		{name: "password to try", password: true, tried: []string{"none", "publickey"}, allowed: []string{"publickey", "password"}},
+		{name: "password refused", password: true, tried: []string{"none", "publickey", "password"}, allowed: []string{"publickey", "password"}, want: true},
+		{name: "password not allowed", password: true, tried: []string{"none", "publickey"}, allowed: []string{"publickey"}, want: true},
+		{name: "listed", tried: []string{"none", "publickey"}, allowed: []string{"publickey", "keyboard-interactive"}},
+		{name: "tried", tried: []string{"none", "publickey", "keyboard-interactive"}, allowed: []string{"publickey"}},
+		{name: "after partial success", tried: []string{"none"}, partial: []string{"publickey"}, allowed: []string{"keyboard-interactive"}},
+	} {
+		var picked bool
+		got, err := unlistedKbd(kbd, c.password, &picked)(&ssh.ClientAuthContext{TriedMethods: c.tried, AllowedMethods: c.allowed, PartialSuccessMethods: c.partial})
+		if err != nil || (got != nil) != c.want || picked != c.want {
+			t.Errorf("%s: picked %v %v (%v), want %v", c.name, got != nil, picked, err, c.want)
+		}
+	}
+}
+
+// TestRefusedKeyWithoutQuestions: a server refusing the key that has no
+// keyboard-interactive login still fails as a refused login, asking
+// nothing.
+func TestRefusedKeyWithoutQuestions(t *testing.T) {
+	srv := server(t)
+	key, _ := keyPEM(t, "")
+	_, srv.AuthorizedKey = keyPEM(t, "")
+	asked := 0
+	_, err := Dial(context.Background(), Config{Addr: srv.Addr, User: "demo", HostKey: trusted(t, srv).Callback(),
+		Credentials: func(context.Context) (Credentials, error) { return Credentials{PrivateKey: key}, nil },
+		Ask:         func(context.Context, Challenge) ([]string, error) { asked++; return nil, nil }})
+	if Classify(err) != KindAuth || asked != 0 {
+		t.Fatalf("refused key: %v (%v), asked %d", err, Classify(err), asked)
+	}
+}
+
+// TestDialWithoutPassword: a login with no password or key gets in where
+// the server takes the "none" method, puts the server's questions to the
+// user, and is refused, not short of credentials, where it needs one.
+func TestDialWithoutPassword(t *testing.T) {
+	none := func(context.Context) (Credentials, error) { return Credentials{None: true}, nil }
+	open, err := sshtest.Start("127.0.0.1:0", "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(open.Close)
+	open.NoClientAuth.Store(true)
+	c, err := Dial(context.Background(), Config{Addr: open.Addr, User: "demo", Credentials: none, HostKey: trusted(t, open).Callback()})
+	if err != nil {
+		t.Fatalf("none: %v", err)
+	}
+	c.Close()
+
+	otp := otpServer(t, "123456")
+	var asked [][]string
+	ask := func(_ context.Context, ch Challenge) ([]string, error) {
+		asked = append(asked, ch.Questions)
+		if len(asked) == 1 {
+			return []string{"secret"}, nil
+		}
+		return []string{"123456"}, nil
+	}
+	c, err = Dial(context.Background(), Config{Name: "db", Addr: otp.Addr, User: "demo", Credentials: none, HostKey: trusted(t, otp).Callback(), Ask: ask})
+	if err != nil {
+		t.Fatalf("questions: %v", err)
+	}
+	c.Close()
+	if len(asked) != 2 || !slices.Equal(asked[0], []string{"Password: "}) {
+		t.Fatalf("asked %q", asked)
+	}
+
+	srv := server(t)
+	if _, err := Dial(context.Background(), Config{Addr: srv.Addr, User: "demo", Credentials: none, HostKey: trusted(t, srv).Callback()}); err == nil || errors.Is(err, ErrNoCredentials) || Classify(err) != KindAuth {
+		t.Fatalf("refused: %v (%v)", err, Classify(err))
+	}
+}
